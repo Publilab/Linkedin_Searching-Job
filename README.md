@@ -4,7 +4,7 @@ Aplicacion local para:
 
 1. Subir CV en PDF/DOCX.
 2. Revisar/confirmar resumen estructurado.
-3. Analizar perfil con Gemini (con fallback si falla/no esta configurado).
+3. Analizar perfil con LLM externo (OpenAI GPT-5-mini por defecto, con fallback deterministico).
 4. Buscar ofertas publicas de LinkedIn sin login.
 5. Calcular score hibrido por fit deterministico + fit LLM + recencia + ubicacion.
 6. Guardar resultados en SQLite con checklist y enlace de postulacion.
@@ -34,10 +34,11 @@ Aplicacion local para:
 
 ## LLM y privacidad
 
-- Proveedor: Gemini Developer API (Google).
+- Proveedor configurable por `LLM_PROVIDER` (`openai` o `google_gemini`).
+- Default recomendado: `openai` + `LLM_MODEL=gpt-5-mini`.
 - Modo: hibrido con fallback deterministico.
 - Redaccion PII previa al envio (email, telefono, URL y nombre probable).
-- Si no hay `GEMINI_API_KEY`, la app no se rompe y funciona en fallback.
+- Si faltan credenciales del proveedor activo, la app no se rompe y funciona en fallback.
 
 ## Variables de entorno
 
@@ -47,6 +48,8 @@ Usa `.env.example` como base:
 - `SCHEDULER_INTERVAL_MINUTES`
 - `LLM_ENABLED`
 - `LLM_PROVIDER`
+- `OPENAI_API_KEY`
+- `OPENAI_BASE_URL`
 - `GEMINI_API_KEY`
 - `LLM_MODEL`
 - `LLM_TIMEOUT_SECONDS`
@@ -79,6 +82,10 @@ NEXT_PUBLIC_API_BASE=http://localhost:8000/api npm run dev
 - `PUT /api/cv/{cv_id}/summary`
 - `POST /api/cv/{cv_id}/analyze`
 - `GET /api/cv/{cv_id}/strategy`
+- `GET /api/session/current`
+- `POST /api/session/state`
+- `POST /api/session/resume`
+- `POST /api/session/close`
 - `POST /api/searches`
 - `POST /api/searches/{search_id}/run`
 - `GET /api/searches/{search_id}/results`

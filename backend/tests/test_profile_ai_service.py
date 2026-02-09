@@ -60,7 +60,7 @@ def test_analyze_profile_fallback_infers_academic_and_hr_roles(monkeypatch):
 
 
 def test_analyze_profile_merges_llm_output_with_local_role_inference(monkeypatch):
-    class FakeGeminiClient:
+    class FakeLLMClient:
         @property
         def enabled(self):
             return True
@@ -87,7 +87,7 @@ def test_analyze_profile_merges_llm_output_with_local_role_inference(monkeypatch
 
     monkeypatch.setattr(settings, "llm_enabled", True)
     monkeypatch.setattr(settings, "gemini_api_key", "fake-key")
-    monkeypatch.setattr("app.services.profile_ai_service.GeminiLLMClient", FakeGeminiClient)
+    monkeypatch.setattr("app.services.profile_ai_service.get_llm_client", lambda: FakeLLMClient())
 
     summary = {
         "highlights": ["Administrador Publico"],

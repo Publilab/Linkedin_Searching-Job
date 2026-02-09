@@ -28,6 +28,7 @@ class CVAnalysisOut(BaseModel):
 
 class CVUploadOut(BaseModel):
     cv_id: str
+    session_id: str | None = None
     text_chars: int
     summary: CVSummary
     analysis: CVAnalysisOut
@@ -161,3 +162,33 @@ class SearchFacetsOut(BaseModel):
     modalities: dict[str, int] = Field(default_factory=dict)
     locations: dict[str, int] = Field(default_factory=dict)
     posted_buckets: dict[str, int] = Field(default_factory=dict)
+
+
+class SessionOut(BaseModel):
+    session_id: str
+    cv_id: str
+    active_search_id: str | None = None
+    ui_state: dict = Field(default_factory=dict)
+    status: str
+    created_at: datetime
+    last_seen_at: datetime
+
+
+class SessionCurrentOut(BaseModel):
+    session: SessionOut | None = None
+
+
+class SessionResumeIn(BaseModel):
+    session_id: str
+    active_search_id: str | None = None
+    ui_state: dict | None = None
+
+
+class SessionStateUpdateIn(BaseModel):
+    session_id: str
+    active_search_id: str | None = None
+    ui_state: dict | None = None
+
+
+class SessionCloseIn(BaseModel):
+    session_id: str

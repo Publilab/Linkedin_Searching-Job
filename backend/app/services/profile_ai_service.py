@@ -6,7 +6,7 @@ import re
 from typing import Any
 
 from app.config import settings
-from app.services.llm.client import GeminiLLMClient, LLMClientError
+from app.services.llm import LLMClientError, get_llm_client
 from app.services.llm.pii import redact_pii
 from app.services.llm.prompts import build_profile_prompt
 from app.services.llm.schemas import LLMCVExtraction
@@ -17,12 +17,12 @@ def analyze_profile(raw_text: str, summary: dict[str, Any]) -> dict[str, Any]:
     redacted_text = redact_pii(raw_text)
     fingerprint = _profile_fingerprint(normalized_summary)
 
-    client = GeminiLLMClient()
+    client = get_llm_client()
     if not client.enabled:
         return _fallback_bundle(
             normalized_summary,
             fingerprint=fingerprint,
-            error="LLM disabled or Gemini API key missing",
+            error=f"LLM disabled or missing {settings.llm_provider} configuration",
         )
 
     prompt = build_profile_prompt(

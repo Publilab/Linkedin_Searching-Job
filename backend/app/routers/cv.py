@@ -22,6 +22,7 @@ from app.services.cv_extract import extract_text_from_upload
 from app.services.cv_summary import summarize_cv_text
 from app.services.market_demand_service import build_search_strategy
 from app.services.profile_ai_service import analyze_profile
+from app.services.session_service import create_session
 
 router = APIRouter(prefix="/cv", tags=["cv"])
 
@@ -42,9 +43,13 @@ async def upload_cv(file: UploadFile = File(...), db: Session = Depends(get_db))
         profile = db.scalar(
             select(models.CandidateProfile).where(models.CandidateProfile.cv_id == existing.id)
         )
+        session = create_session(db, cv_id=existing.id)
+        db.commit()
+        db.refresh(session)
         summary = (profile.summary_json if profile else {}) or {}
         return CVUploadOut(
             cv_id=existing.id,
+            session_id=session.id,
             text_chars=len(existing.raw_text),
             summary=CVSummary(**summary),
             analysis=_analysis_out(profile),
@@ -84,12 +89,15 @@ async def upload_cv(file: UploadFile = File(...), db: Session = Depends(get_db))
         confirmed_at=None,
     )
     db.add(profile)
+    session = create_session(db, cv_id=cv.id)
     db.commit()
     db.refresh(cv)
     db.refresh(profile)
+    db.refresh(session)
 
     return CVUploadOut(
         cv_id=cv.id,
+        session_id=session.id,
         text_chars=len(raw_text),
         summary=CVSummary(**summary),
         analysis=CVAnalysisOut(**ai_bundle["analysis"], llm_error=ai_bundle.get("llm_error")),

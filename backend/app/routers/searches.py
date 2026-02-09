@@ -23,6 +23,7 @@ from app.schemas import (
     SearchRunOut,
 )
 from app.services.search_service import run_search_once, set_scheduler_running
+from app.services.session_service import update_session_state
 
 router = APIRouter(prefix="/searches", tags=["searches"])
 
@@ -148,6 +149,14 @@ async def create_search(payload: SearchCreateIn, db: Session = Depends(get_db)) 
     db.add(search)
     db.commit()
     db.refresh(search)
+
+    active_session = db.scalar(
+        select(models.CVSession)
+        .where(models.CVSession.cv_id == payload.cv_id, models.CVSession.status == "active")
+        .order_by(desc(models.CVSession.last_seen_at))
+    )
+    if active_session:
+        update_session_state(db, session_id=active_session.id, active_search_id=search.id)
 
     set_scheduler_running(db, running=True)
 

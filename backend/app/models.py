@@ -39,6 +39,9 @@ class CVDocument(Base):
     searches: Mapped[list[SearchConfig]] = relationship(
         "SearchConfig", back_populates="cv", cascade="all, delete-orphan"
     )
+    sessions: Mapped[list[CVSession]] = relationship(
+        "CVSession", back_populates="cv", cascade="all, delete-orphan"
+    )
 
 
 class CandidateProfile(Base):
@@ -93,6 +96,44 @@ class SearchConfig(Base):
     results: Mapped[list[SearchResult]] = relationship(
         "SearchResult", back_populates="search", cascade="all, delete-orphan"
     )
+    active_sessions: Mapped[list[CVSession]] = relationship("CVSession", back_populates="active_search")
+    interactions: Mapped[list[Interaction]] = relationship(
+        "Interaction", back_populates="search", cascade="all, delete-orphan"
+    )
+    llm_usage_logs: Mapped[list[LLMUsageLog]] = relationship(
+        "LLMUsageLog", back_populates="search", cascade="all, delete-orphan"
+    )
+
+
+class CVSession(Base):
+    __tablename__ = "sessions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    cv_id: Mapped[str] = mapped_column(ForeignKey("cv_documents.id", ondelete="CASCADE"), nullable=False)
+    active_search_id: Mapped[str | None] = mapped_column(
+        ForeignKey("search_configs.id", ondelete="SET NULL"), nullable=True
+    )
+    ui_state_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+    cv: Mapped[CVDocument] = relationship("CVDocument", back_populates="sessions")
+    active_search: Mapped[SearchConfig | None] = relationship("SearchConfig", back_populates="active_sessions")
+    interactions: Mapped[list[Interaction]] = relationship(
+        "Interaction", back_populates="session", cascade="all, delete-orphan"
+    )
+    llm_usage_logs: Mapped[list[LLMUsageLog]] = relationship(
+        "LLMUsageLog", back_populates="session", cascade="all, delete-orphan"
+    )
+
+    __table_args__ = (
+        Index("idx_sessions_cv_last_seen", "cv_id", "last_seen_at"),
+        Index("idx_sessions_status_last_seen", "status", "last_seen_at"),
+    )
 
 
 class SchedulerRun(Base):
@@ -112,6 +153,9 @@ class SchedulerRun(Base):
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     search: Mapped[SearchConfig] = relationship("SearchConfig", back_populates="runs")
+    llm_usage_logs: Mapped[list[LLMUsageLog]] = relationship(
+        "LLMUsageLog", back_populates="run", cascade="all, delete-orphan"
+    )
 
 
 class JobPosting(Base):
@@ -144,6 +188,9 @@ class JobPosting(Base):
     last_seen_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
 
     results: Mapped[list[SearchResult]] = relationship("SearchResult", back_populates="job")
+    interactions: Mapped[list[Interaction]] = relationship(
+        "Interaction", back_populates="job", cascade="all, delete-orphan"
+    )
 
     __table_args__ = (
         UniqueConstraint("source", "external_job_id", name="uq_job_postings_source_external_id"),
@@ -213,4 +260,78 @@ class SchedulerState(Base):
     last_tick_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+
+class Interaction(Base):
+    __tablename__ = "interactions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    cv_id: Mapped[str] = mapped_column(ForeignKey("cv_documents.id", ondelete="CASCADE"), nullable=False)
+    session_id: Mapped[str | None] = mapped_column(ForeignKey("sessions.id", ondelete="SET NULL"), nullable=True)
+    search_config_id: Mapped[str | None] = mapped_column(
+        ForeignKey("search_configs.id", ondelete="SET NULL"), nullable=True
+    )
+    job_posting_id: Mapped[str | None] = mapped_column(
+        ForeignKey("job_postings.id", ondelete="SET NULL"), nullable=True
+    )
+    event_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    ts: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    dwell_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    meta_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+
+    session: Mapped[CVSession | None] = relationship("CVSession", back_populates="interactions")
+    search: Mapped[SearchConfig | None] = relationship("SearchConfig", back_populates="interactions")
+    job: Mapped[JobPosting | None] = relationship("JobPosting", back_populates="interactions")
+
+    __table_args__ = (
+        Index("idx_interactions_cv_ts", "cv_id", "ts"),
+        Index("idx_interactions_event_ts", "event_type", "ts"),
+    )
+
+
+class Insight(Base):
+    __tablename__ = "insights"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    cv_id: Mapped[str] = mapped_column(ForeignKey("cv_documents.id", ondelete="CASCADE"), nullable=False)
+    period_start: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    period_end: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    insights_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    model_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    token_in: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    token_out: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    __table_args__ = (Index("idx_insights_cv_created", "cv_id", "created_at"),)
+
+
+class LLMUsageLog(Base):
+    __tablename__ = "llm_usage_logs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    cv_id: Mapped[str | None] = mapped_column(ForeignKey("cv_documents.id", ondelete="SET NULL"), nullable=True)
+    session_id: Mapped[str | None] = mapped_column(ForeignKey("sessions.id", ondelete="SET NULL"), nullable=True)
+    search_config_id: Mapped[str | None] = mapped_column(
+        ForeignKey("search_configs.id", ondelete="SET NULL"), nullable=True
+    )
+    scheduler_run_id: Mapped[str | None] = mapped_column(
+        ForeignKey("scheduler_runs.id", ondelete="SET NULL"), nullable=True
+    )
+    feature: Mapped[str] = mapped_column(String(64), nullable=False)
+    model_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    endpoint: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    token_in: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    token_out: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+
+    session: Mapped[CVSession | None] = relationship("CVSession", back_populates="llm_usage_logs")
+    search: Mapped[SearchConfig | None] = relationship("SearchConfig", back_populates="llm_usage_logs")
+    run: Mapped[SchedulerRun | None] = relationship("SchedulerRun", back_populates="llm_usage_logs")
+
+    __table_args__ = (
+        Index("idx_llm_usage_created", "created_at"),
+        Index("idx_llm_usage_model_created", "model_name", "created_at"),
+        Index("idx_llm_usage_feature_created", "feature", "created_at"),
     )

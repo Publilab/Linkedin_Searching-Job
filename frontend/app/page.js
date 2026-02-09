@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8000/api";
+const SESSION_STORAGE_KEY = "linkedin_cv_session_id";
 
 const I18N = {
   es: {
@@ -167,6 +168,8 @@ export default function Home() {
 
   const [file, setFile] = useState(null);
   const [cvId, setCvId] = useState("");
+  const [sessionId, setSessionId] = useState("");
+  const [restoringSession, setRestoringSession] = useState(false);
 
   const [summary, setSummary] = useState({
     highlights: [],
@@ -296,9 +299,140 @@ export default function Home() {
     setFacets(data);
   };
 
+  const applyUiState = (uiState) => {
+    if (!uiState || typeof uiState !== "object") return;
+    if (typeof uiState.country === "string") setCountry(uiState.country);
+    if (typeof uiState.city === "string") setCity(uiState.city);
+    if (uiState.time_window_hours != null) setTimeWindow(String(uiState.time_window_hours));
+    if (typeof uiState.sort_by === "string") setSortBy(uiState.sort_by);
+    if (typeof uiState.category === "string") setCategoryFilter(uiState.category);
+    if (typeof uiState.subcategory === "string") setSubcategoryFilter(uiState.subcategory);
+    if (typeof uiState.max_posted_hours === "string") setMaxPostedHours(uiState.max_posted_hours);
+    if (typeof uiState.location_contains === "string") setLocationContains(uiState.location_contains);
+    if (uiState.page != null) setResultsPage(Math.max(1, Number(uiState.page) || 1));
+    if (uiState.page_size != null) setResultsPageSize(String(Number(uiState.page_size) || 50));
+    if (typeof uiState.lang === "string" && (uiState.lang === "es" || uiState.lang === "en")) setLang(uiState.lang);
+    if (Array.isArray(uiState.query_items)) {
+      setQueryItems(mergeQueryItems([], uiState.query_items, { enabled: true, source: "session" }));
+    }
+    if (typeof uiState.search_id === "string") setSearchId(uiState.search_id);
+  };
+
   useEffect(() => {
     refreshScheduler().catch(() => null);
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      let storedSessionId = "";
+      try {
+        storedSessionId = localStorage.getItem(SESSION_STORAGE_KEY) || "";
+      } catch {
+        storedSessionId = "";
+      }
+      if (!storedSessionId) return;
+
+      setRestoringSession(true);
+      try {
+        const out = await api(`/session/current?session_id=${encodeURIComponent(storedSessionId)}`);
+        const session = out?.session;
+        if (!session) {
+          localStorage.removeItem(SESSION_STORAGE_KEY);
+          return;
+        }
+        if (cancelled) return;
+
+        setSessionId(session.session_id);
+        setCvId(session.cv_id || "");
+        if (session.active_search_id) {
+          setSearchId(session.active_search_id);
+        }
+        applyUiState(session.ui_state || {});
+
+        if (session.cv_id) {
+          const summaryOut = await api(`/cv/${session.cv_id}/summary`);
+          if (cancelled) return;
+          setSummary(summaryOut.summary || summary);
+          setAnalysis(summaryOut.analysis || analysis);
+          setQueryItems((prev) =>
+            mergeQueryItems(prev, summaryOut.analysis?.recommended_queries || [], { enabled: true, source: "analysis" }),
+          );
+          await refreshStrategy(session.cv_id);
+        }
+      } catch {
+        // noop
+      } finally {
+        if (!cancelled) setRestoringSession(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (!sessionId) return;
+    try {
+      localStorage.setItem(SESSION_STORAGE_KEY, sessionId);
+    } catch {
+      // noop
+    }
+  }, [sessionId]);
+
+  useEffect(() => {
+    if (!sessionId || restoringSession) return;
+
+    const payload = {
+      session_id: sessionId,
+      active_search_id: searchId || null,
+      ui_state: {
+        cv_id: cvId || null,
+        search_id: searchId || null,
+        country,
+        city,
+        time_window_hours: Number(timeWindow) || 24,
+        query_items: queryItems,
+        sort_by: sortBy,
+        category: categoryFilter,
+        subcategory: subcategoryFilter,
+        max_posted_hours: maxPostedHours,
+        location_contains: locationContains,
+        page: resultsPage,
+        page_size: Number(resultsPageSize) || 50,
+        lang,
+      },
+    };
+
+    const timer = setTimeout(() => {
+      api("/session/state", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      }).catch(() => null);
+    }, 400);
+
+    return () => clearTimeout(timer);
+  }, [
+    sessionId,
+    restoringSession,
+    cvId,
+    searchId,
+    country,
+    city,
+    timeWindow,
+    queryItems,
+    sortBy,
+    categoryFilter,
+    subcategoryFilter,
+    maxPostedHours,
+    locationContains,
+    resultsPage,
+    resultsPageSize,
+    lang,
+  ]);
 
   useEffect(() => {
     if (!searchId) return;
@@ -329,6 +463,7 @@ export default function Home() {
       formData.append("file", file);
 
       const out = await api("/cv/upload", { method: "POST", body: formData });
+      setSessionId(out.session_id || "");
       setCvId(out.cv_id);
       setSummary(out.summary);
       setAnalysis(out.analysis || analysis);
@@ -545,6 +680,7 @@ export default function Home() {
           <div className="toolbar">
             <button onClick={uploadCv} disabled={busy || !file}>Upload</button>
             <span className="small">CV ID: {cvId || "-"}</span>
+            <span className="small">Session ID: {sessionId || "-"}</span>
           </div>
         </section>
 

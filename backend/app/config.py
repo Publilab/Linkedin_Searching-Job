@@ -22,6 +22,8 @@ class Settings(BaseSettings):
     llm_enabled: bool = True
     llm_provider: str = "google_gemini"
     gemini_api_key: str | None = None
+    openai_api_key: str | None = None
+    openai_base_url: str | None = None
     llm_model: str = "gemini-2.0-flash"
     llm_timeout_seconds: int = 25
     llm_max_retries: int = 3

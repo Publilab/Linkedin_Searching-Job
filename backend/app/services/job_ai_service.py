@@ -5,7 +5,7 @@ import re
 from typing import Any
 
 from app.config import settings
-from app.services.llm.client import GeminiLLMClient, LLMClientError
+from app.services.llm import LLMClientError, get_llm_client
 from app.services.llm.prompts import build_job_prompt
 from app.services.llm.schemas import LLMJobEvaluation
 
@@ -24,9 +24,9 @@ def evaluate_job_fit(
     if not allow_llm:
         return fallback
 
-    client = GeminiLLMClient()
+    client = get_llm_client()
     if not client.enabled:
-        fallback["llm_error"] = "LLM disabled or Gemini API key missing"
+        fallback["llm_error"] = f"LLM disabled or missing {settings.llm_provider} configuration"
         return fallback
 
     prompt = build_job_prompt(
