@@ -1,0 +1,109 @@
+# LinkedIn CV Job Finder (Greenfield + LLM)
+
+Aplicacion local para:
+
+1. Subir CV en PDF/DOCX.
+2. Revisar/confirmar resumen estructurado.
+3. Analizar perfil con Gemini (con fallback si falla/no esta configurado).
+4. Buscar ofertas publicas de LinkedIn sin login.
+5. Calcular score hibrido por fit deterministico + fit LLM + recencia + ubicacion.
+6. Guardar resultados en SQLite con checklist y enlace de postulacion.
+7. Re-buscar en segundo plano cada 30 minutos y mostrar nuevas arriba.
+
+## Estructura
+
+- `backend/`: FastAPI + SQLAlchemy + scheduler interno + capa LLM.
+- `frontend/`: Next.js UI bilingue ES/EN.
+
+## Reglas de dedupe
+
+1. Primero por `source + external_job_id`.
+2. Si no hay id, fallback por `canonical_url_hash`.
+3. Si la oferta ya existe, se actualizan sus datos (incluye `applicant_count`) sin duplicar filas.
+
+## Modelo de datos (SQLite)
+
+- `cv_documents`
+- `candidate_profiles`
+- `search_configs`
+- `job_postings`
+- `search_results`
+- `scheduler_runs`
+- `scheduler_state`
+- `result_checks`
+
+## LLM y privacidad
+
+- Proveedor: Gemini Developer API (Google).
+- Modo: hibrido con fallback deterministico.
+- Redaccion PII previa al envio (email, telefono, URL y nombre probable).
+- Si no hay `GEMINI_API_KEY`, la app no se rompe y funciona en fallback.
+
+## Variables de entorno
+
+Usa `.env.example` como base:
+
+- `DATABASE_URL`
+- `SCHEDULER_INTERVAL_MINUTES`
+- `LLM_ENABLED`
+- `LLM_PROVIDER`
+- `GEMINI_API_KEY`
+- `LLM_MODEL`
+- `LLM_TIMEOUT_SECONDS`
+- `LLM_MAX_RETRIES`
+- `LLM_MAX_JOBS_PER_RUN`
+- `LLM_PROMPT_VERSION`
+
+## Backend
+
+```bash
+cd backend
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+uvicorn app.main:app --reload --port 8000
+```
+
+## Frontend
+
+```bash
+cd frontend
+npm install
+NEXT_PUBLIC_API_BASE=http://localhost:8000/api npm run dev
+```
+
+## Endpoints principales
+
+- `POST /api/cv/upload`
+- `GET /api/cv/{cv_id}/summary`
+- `PUT /api/cv/{cv_id}/summary`
+- `POST /api/cv/{cv_id}/analyze`
+- `GET /api/cv/{cv_id}/strategy`
+- `POST /api/searches`
+- `POST /api/searches/{search_id}/run`
+- `GET /api/searches/{search_id}/results`
+- `GET /api/searches/{search_id}/facets`
+- `GET /api/searches/{search_id}/new-count`
+- `PATCH /api/searches/results/{result_id}/check`
+- `POST /api/scheduler/start`
+- `POST /api/scheduler/stop`
+- `GET /api/scheduler/status`
+
+## Notas de scoring
+
+- Con LLM: `0.55*llm_fit + 0.25*deterministico + 0.10*recencia + 0.10*ubicacion`.
+- Fallback: `0.75*deterministico + 0.15*recencia + 0.10*ubicacion`.
+
+## Mejora de estrategia
+
+- El parser de CV identifica secciones completas (experiencia, educación/formación, habilidades e idiomas) en ES/EN.
+- Se prioriza experiencia + educación para construir consultas de búsqueda.
+- `GET /api/cv/{cv_id}/strategy` entrega queries recomendadas y roles demandados (internet/fallback).
+
+## Ventanas de publicación soportadas
+
+- `1h`, `3h`, `8h`, `24h`, `72h`, `168h (1 semana)`, `720h (1 mes)`.
+
+## Paginación de resultados
+
+- `GET /api/searches/{search_id}/results` soporta `page` (default `1`) y `page_size` (default `50`, max `200`).
