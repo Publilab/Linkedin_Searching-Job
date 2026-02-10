@@ -28,12 +28,20 @@ const I18N = {
     remove: "Quitar",
     selectAll: "Seleccionar todos",
     deselectAll: "Deseleccionar todos",
+    deleteSelected: "Borrar seleccionadas",
+    addToSearch: "Agregar",
     page: "Página",
     of: "de",
     total: "Total",
     pageSize: "Tamaño de página",
     prev: "Anterior",
     next: "Siguiente",
+    sessionHistory: "Sesiones previas",
+    fileName: "Archivo",
+    analysisAt: "Análisis ejecutado",
+    createdAt: "Sesión creada",
+    status: "Estado",
+    resume: "Retomar",
   },
   en: {
     title: "LinkedIn Job Finder from CV",
@@ -57,12 +65,20 @@ const I18N = {
     remove: "Remove",
     selectAll: "Select all",
     deselectAll: "Deselect all",
+    deleteSelected: "Delete selected",
+    addToSearch: "Add",
     page: "Page",
     of: "of",
     total: "Total",
     pageSize: "Page size",
     prev: "Prev",
     next: "Next",
+    sessionHistory: "Session history",
+    fileName: "File",
+    analysisAt: "Analysis run",
+    createdAt: "Session created",
+    status: "Status",
+    resume: "Resume",
   },
 };
 
@@ -126,6 +142,13 @@ function normalizeQuery(value) {
     .trim();
 }
 
+function makeQueryId() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `q_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 9)}`;
+}
+
 function mergeQueryItems(existing, incoming, options = {}) {
   const enabled = options.enabled ?? true;
   const source = options.source || "manual";
@@ -135,6 +158,7 @@ function mergeQueryItems(existing, incoming, options = {}) {
     const text = normalizeQuery(item?.text || item);
     if (!text) continue;
     byKey.set(text.toLowerCase(), {
+      id: item?.id || makeQueryId(),
       text,
       enabled: item?.enabled !== false,
       source: item?.source || source,
@@ -146,7 +170,32 @@ function mergeQueryItems(existing, incoming, options = {}) {
     if (!text) continue;
     const key = text.toLowerCase();
     if (byKey.has(key)) continue;
-    byKey.set(key, { text, enabled, source });
+    byKey.set(key, { id: value?.id || makeQueryId(), text, enabled, source });
+  }
+
+  return Array.from(byKey.values());
+}
+
+function mergeSuggestionItems(existing, incoming, options = {}) {
+  const source = options.source || "analysis";
+  const byKey = new Map();
+
+  for (const item of existing || []) {
+    const text = normalizeQuery(item?.text || item);
+    if (!text) continue;
+    byKey.set(text.toLowerCase(), {
+      id: item?.id || makeQueryId(),
+      text,
+      source: item?.source || source,
+    });
+  }
+
+  for (const value of incoming || []) {
+    const text = normalizeQuery(value?.text || value);
+    if (!text) continue;
+    const key = text.toLowerCase();
+    if (byKey.has(key)) continue;
+    byKey.set(key, { id: value?.id || makeQueryId(), text, source });
   }
 
   return Array.from(byKey.values());
@@ -159,6 +208,13 @@ function activeQueryList(items) {
   return uniqueList(enabledItems);
 }
 
+function formatDateTime(value) {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleString();
+}
+
 export default function Home() {
   const [lang, setLang] = useState("es");
   const t = I18N[lang];
@@ -169,6 +225,7 @@ export default function Home() {
   const [file, setFile] = useState(null);
   const [cvId, setCvId] = useState("");
   const [sessionId, setSessionId] = useState("");
+  const [sessionHistory, setSessionHistory] = useState([]);
   const [restoringSession, setRestoringSession] = useState(false);
 
   const [summary, setSummary] = useState({
@@ -202,6 +259,7 @@ export default function Home() {
   const [city, setCity] = useState("");
   const [timeWindow, setTimeWindow] = useState("24");
   const [queryItems, setQueryItems] = useState([]);
+  const [suggestedQueries, setSuggestedQueries] = useState([]);
   const [newQuery, setNewQuery] = useState("");
 
   const [sortBy, setSortBy] = useState("newest");
@@ -258,12 +316,50 @@ export default function Home() {
     setScheduler(status);
   };
 
+  const refreshSessionHistory = async () => {
+    const out = await api("/session/history?limit=50");
+    setSessionHistory(out.items || []);
+  };
+
+  const loadSessionSnapshot = async (session) => {
+    if (!session) return;
+
+    setSessionId(session.session_id || "");
+    setCvId(session.cv_id || "");
+    setSearchId(session.active_search_id || "");
+    applyUiState(session.ui_state || {});
+
+    if (session.cv_id) {
+      const summaryOut = await api(`/cv/${session.cv_id}/summary`);
+      setSummary(summaryOut.summary || summary);
+      setAnalysis(summaryOut.analysis || analysis);
+      setSuggestedQueries((prev) =>
+        mergeSuggestionItems(prev, summaryOut.analysis?.recommended_queries || [], { source: "analysis" }),
+      );
+      await refreshStrategy(session.cv_id);
+    }
+
+    if (session.active_search_id) {
+      await refreshResults(session.active_search_id);
+      await refreshFacets(session.active_search_id);
+    } else {
+      setResults([]);
+      setFacets({
+        categories: {},
+        subcategories: {},
+        modalities: {},
+        locations: {},
+        posted_buckets: {},
+      });
+    }
+  };
+
   const refreshStrategy = async (targetCvId = cvId) => {
     if (!targetCvId) return;
     const out = await api(`/cv/${targetCvId}/strategy`);
     setStrategy(out);
-    setQueryItems((prev) =>
-      mergeQueryItems(prev, out.recommended_queries || [], { enabled: true, source: "strategy" }),
+    setSuggestedQueries((prev) =>
+      mergeSuggestionItems(prev, out.recommended_queries || [], { source: "strategy" }),
     );
   };
 
@@ -315,11 +411,15 @@ export default function Home() {
     if (Array.isArray(uiState.query_items)) {
       setQueryItems(mergeQueryItems([], uiState.query_items, { enabled: true, source: "session" }));
     }
+    if (Array.isArray(uiState.suggested_queries)) {
+      setSuggestedQueries(mergeSuggestionItems([], uiState.suggested_queries, { source: "session" }));
+    }
     if (typeof uiState.search_id === "string") setSearchId(uiState.search_id);
   };
 
   useEffect(() => {
     refreshScheduler().catch(() => null);
+    refreshSessionHistory().catch(() => null);
   }, []);
 
   useEffect(() => {
@@ -343,23 +443,7 @@ export default function Home() {
         }
         if (cancelled) return;
 
-        setSessionId(session.session_id);
-        setCvId(session.cv_id || "");
-        if (session.active_search_id) {
-          setSearchId(session.active_search_id);
-        }
-        applyUiState(session.ui_state || {});
-
-        if (session.cv_id) {
-          const summaryOut = await api(`/cv/${session.cv_id}/summary`);
-          if (cancelled) return;
-          setSummary(summaryOut.summary || summary);
-          setAnalysis(summaryOut.analysis || analysis);
-          setQueryItems((prev) =>
-            mergeQueryItems(prev, summaryOut.analysis?.recommended_queries || [], { enabled: true, source: "analysis" }),
-          );
-          await refreshStrategy(session.cv_id);
-        }
+        await loadSessionSnapshot(session);
       } catch {
         // noop
       } finally {
@@ -395,6 +479,7 @@ export default function Home() {
         city,
         time_window_hours: Number(timeWindow) || 24,
         query_items: queryItems,
+        suggested_queries: suggestedQueries,
         sort_by: sortBy,
         category: categoryFilter,
         subcategory: subcategoryFilter,
@@ -424,6 +509,7 @@ export default function Home() {
     city,
     timeWindow,
     queryItems,
+    suggestedQueries,
     sortBy,
     categoryFilter,
     subcategoryFilter,
@@ -467,11 +553,14 @@ export default function Home() {
       setCvId(out.cv_id);
       setSummary(out.summary);
       setAnalysis(out.analysis || analysis);
-      setQueryItems((prev) =>
-        mergeQueryItems(prev, out.analysis?.recommended_queries || [], { enabled: true, source: "analysis" }),
+      setSearchId("");
+      setQueryItems([]);
+      setSuggestedQueries(
+        mergeSuggestionItems([], out.analysis?.recommended_queries || [], { source: "analysis" }),
       );
 
       await refreshStrategy(out.cv_id);
+      await refreshSessionHistory();
     });
 
   const saveSummary = () =>
@@ -495,8 +584,8 @@ export default function Home() {
       });
       setSummary(out.summary);
       setAnalysis(out.analysis || analysis);
-      setQueryItems((prev) =>
-        mergeQueryItems(prev, out.analysis?.recommended_queries || [], { enabled: true, source: "analysis" }),
+      setSuggestedQueries((prev) =>
+        mergeSuggestionItems(prev, out.analysis?.recommended_queries || [], { source: "analysis" }),
       );
       await refreshStrategy(cvId);
     });
@@ -507,8 +596,8 @@ export default function Home() {
       const out = await api(`/cv/${cvId}/analyze`, { method: "POST" });
       setSummary(out.summary);
       setAnalysis(out.analysis || analysis);
-      setQueryItems((prev) =>
-        mergeQueryItems(prev, out.analysis?.recommended_queries || [], { enabled: true, source: "analysis" }),
+      setSuggestedQueries((prev) =>
+        mergeSuggestionItems(prev, out.analysis?.recommended_queries || [], { source: "analysis" }),
       );
       await refreshStrategy(cvId);
     });
@@ -605,17 +694,38 @@ export default function Home() {
       setScheduler(out);
     });
 
+  const resumeFromHistory = (targetSessionId) =>
+    run(async () => {
+      if (!targetSessionId) return;
+      const resumed = await api("/session/resume", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: targetSessionId }),
+      });
+      await loadSessionSnapshot(resumed);
+      await refreshSessionHistory();
+    });
+
   const addRecommendedQuery = (query) => {
+    const normalized = normalizeQuery(query);
+    if (!normalized) return;
     setQueryItems((prev) => {
-      const key = normalizeQuery(query).toLowerCase();
+      const key = normalized.toLowerCase();
       const next = [...prev];
       const idx = next.findIndex((item) => normalizeQuery(item.text).toLowerCase() === key);
       if (idx >= 0) {
         next[idx] = { ...next[idx], enabled: true };
         return next;
       }
-      return mergeQueryItems(next, [query], { enabled: true, source: "recommended" });
+      return mergeQueryItems(next, [normalized], { enabled: true, source: "recommended" });
     });
+  };
+
+  const updateSuggestedQuery = (index, value) => {
+    const next = [...suggestedQueries];
+    if (!next[index]) return;
+    next[index] = { ...next[index], text: value };
+    setSuggestedQueries(next);
   };
 
   const addManualQuery = () => {
@@ -648,6 +758,11 @@ export default function Home() {
     const next = [...queryItems];
     next.splice(index, 1);
     setQueryItems(next);
+  };
+
+  const removeSelectedQueryItems = () => {
+    if (queryItems.length === 0) return;
+    setQueryItems((prev) => prev.filter((item) => item?.enabled === false));
   };
 
   const enabledQueryCount = activeQueryList(queryItems).length;
@@ -698,6 +813,47 @@ export default function Home() {
       </div>
 
       <section className="card" style={{ marginTop: 14 }}>
+        <h2>{t.sessionHistory}</h2>
+        <div style={{ display: "grid", gap: 8 }}>
+          {sessionHistory.length === 0 ? (
+            <p className="small">No sessions yet.</p>
+          ) : (
+            sessionHistory.map((item) => (
+              <div
+                key={item.session_id}
+                className="row"
+                style={{
+                  gridTemplateColumns: "1.2fr 1fr 1fr auto",
+                  gap: 8,
+                  alignItems: "center",
+                }}
+              >
+                <div className="small">
+                  <strong>{t.fileName}:</strong> {item.cv_filename || "-"}
+                </div>
+                <div className="small">
+                  <strong>{t.analysisAt}:</strong> {formatDateTime(item.analysis_executed_at)}
+                </div>
+                <div className="small">
+                  <strong>{t.createdAt}:</strong> {formatDateTime(item.created_at)}
+                  <br />
+                  <strong>{t.status}:</strong> {item.status || "-"}
+                </div>
+                <button
+                  type="button"
+                  className="secondary"
+                  disabled={busy || !item.session_id || item.session_id === sessionId}
+                  onClick={() => resumeFromHistory(item.session_id)}
+                >
+                  {t.resume}
+                </button>
+              </div>
+            ))
+          )}
+        </div>
+      </section>
+
+      <section className="card" style={{ marginTop: 14 }}>
         <h2>{t.analysis}</h2>
         <p className="small">LLM status: <strong>{analysis.llm_status || "fallback"}</strong></p>
         {analysis.llm_error ? <p className="small"><strong>LLM error:</strong> {analysis.llm_error}</p> : null}
@@ -724,18 +880,33 @@ export default function Home() {
 
         <div style={{ marginTop: 8 }}>
           <p className="small"><strong>{t.recommendedQueries}:</strong></p>
-          <div className="toolbar">
-            {uniqueList([...(analysis.recommended_queries || []), ...(strategy.recommended_queries || [])]).map((q) => (
-              <button key={q} className="secondary" type="button" onClick={() => addRecommendedQuery(q)}>
-                + {q}
-              </button>
-            ))}
+          <div style={{ marginTop: 8, display: "grid", gap: 6 }}>
+            {suggestedQueries.length === 0 ? (
+              <p className="small">No suggestions yet.</p>
+            ) : (
+              suggestedQueries.map((item, idx) => (
+                <div key={item.id || `${item.text}-${idx}`} className="row" style={{ gridTemplateColumns: "1fr auto", gap: 8 }}>
+                  <input
+                    value={item.text}
+                    onChange={(e) => updateSuggestedQuery(idx, e.target.value)}
+                    placeholder="AI suggestion"
+                  />
+                  <button
+                    className="secondary"
+                    type="button"
+                    onClick={() => addRecommendedQuery(item.text)}
+                  >
+                    + {t.addToSearch}
+                  </button>
+                </div>
+              ))
+            )}
           </div>
         </div>
 
         <div className="toolbar" style={{ marginTop: 10 }}>
-          <button className="secondary" onClick={reanalyze} disabled={busy || !cvId}>{t.reanalyze}</button>
-          <button className="secondary" onClick={() => run(() => refreshStrategy(cvId))} disabled={busy || !cvId}>{t.loadStrategy}</button>
+          <button className="ai-reanalyze" onClick={reanalyze} disabled={busy || !cvId}>{t.reanalyze}</button>
+          <button className="ai-strategy" onClick={() => run(() => refreshStrategy(cvId))} disabled={busy || !cvId}>{t.loadStrategy}</button>
         </div>
       </section>
 
@@ -808,8 +979,8 @@ export default function Home() {
             </select>
           </label>
         </div>
-        <label>
-          {t.activeQueries}
+        <div>
+          <p className="small" style={{ margin: 0, marginBottom: 6 }}>{t.activeQueries}</p>
           <div className="toolbar" style={{ marginTop: 6 }}>
             <input
               value={newQuery}
@@ -841,13 +1012,21 @@ export default function Home() {
             >
               {t.deselectAll}
             </button>
+            <button
+              type="button"
+              className="secondary"
+              disabled={queryItems.every((item) => item?.enabled === false)}
+              onClick={removeSelectedQueryItems}
+            >
+              {t.deleteSelected}
+            </button>
           </div>
           <div style={{ marginTop: 8, display: "grid", gap: 6 }}>
             {queryItems.length === 0 ? (
               <p className="small">No queries yet.</p>
             ) : (
               queryItems.map((item, idx) => (
-                <div key={`${item.text}-${idx}`} className="row" style={{ gridTemplateColumns: "auto 1fr auto", gap: 8 }}>
+                <div key={item.id || `${item.text}-${idx}`} className="row" style={{ gridTemplateColumns: "auto 1fr auto", gap: 8 }}>
                   <input
                     type="checkbox"
                     checked={item.enabled !== false}
@@ -864,7 +1043,7 @@ export default function Home() {
             )}
           </div>
           <p className="small">{t.enabledQueries}: {enabledQueryCount}</p>
-        </label>
+        </div>
         <div className="toolbar">
           <button onClick={createSearch} disabled={busy || !cvId}>{t.runSearch}</button>
           <button className="secondary" onClick={rerunSearch} disabled={busy || !searchId}>Run Again</button>

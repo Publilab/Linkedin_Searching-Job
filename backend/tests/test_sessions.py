@@ -28,6 +28,8 @@ def test_upload_creates_session_and_supports_state_roundtrip(monkeypatch):
         current_body = current.json()["session"]
         assert current_body["session_id"] == session_id
         assert current_body["cv_id"] == cv_id
+        assert current_body["cv_filename"] == "cv.pdf"
+        assert current_body["analysis_executed_at"] is not None
 
         state = client.post(
             "/api/session/state",
@@ -55,6 +57,12 @@ def test_upload_creates_session_and_supports_state_roundtrip(monkeypatch):
         closed_session = closed_current.json()["session"]
         if closed_session:
             assert closed_session["session_id"] != session_id
+
+        history = client.get("/api/session/history?limit=20")
+        assert history.status_code == 200
+        items = history.json()["items"]
+        assert isinstance(items, list)
+        assert any(item["session_id"] == session_id for item in items)
 
 
 def test_resume_session_and_link_active_search(monkeypatch):
@@ -107,3 +115,33 @@ def test_resume_session_and_link_active_search(monkeypatch):
         assert refreshed.status_code == 200
         refreshed_session = refreshed.json()["session"]
         assert refreshed_session["active_search_id"] == search_id
+
+
+def test_upload_deduplicates_by_file_hash_and_keeps_session_history(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.cv_extract._extract_pdf",
+        lambda _: "Public Administrator\nSkills: Policy, RRHH\nEducation: Administrador Publico",
+    )
+
+    with TestClient(app) as client:
+        first = client.post(
+            "/api/cv/upload",
+            files={"file": ("cv-original.pdf", BytesIO(b"same-content"), "application/pdf")},
+        )
+        second = client.post(
+            "/api/cv/upload",
+            files={"file": ("cv-duplicado.pdf", BytesIO(b"same-content"), "application/pdf")},
+        )
+        assert first.status_code == 200
+        assert second.status_code == 200
+
+        first_body = first.json()
+        second_body = second.json()
+        assert first_body["cv_id"] == second_body["cv_id"]
+        assert first_body["session_id"] != second_body["session_id"]
+
+        history = client.get("/api/session/history?limit=10")
+        assert history.status_code == 200
+        items = history.json()["items"]
+        matches = [item for item in items if item["cv_id"] == first_body["cv_id"]]
+        assert len(matches) >= 2

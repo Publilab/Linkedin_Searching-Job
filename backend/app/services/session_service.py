@@ -14,6 +14,7 @@ def create_session(
     cv_id: str,
     ui_state_json: dict | None = None,
     active_search_id: str | None = None,
+    analysis_executed_at: datetime | None = None,
 ) -> models.CVSession:
     _deactivate_active_sessions(db)
     now = datetime.utcnow()
@@ -21,6 +22,7 @@ def create_session(
         cv_id=cv_id,
         active_search_id=active_search_id,
         ui_state_json=ui_state_json or {},
+        analysis_executed_at=analysis_executed_at,
         status="active",
         created_at=now,
         last_seen_at=now,
@@ -124,6 +126,13 @@ def update_session_state(
     db.commit()
     db.refresh(session)
     return session
+
+
+def list_sessions(db: Session, *, limit: int = 50) -> list[models.CVSession]:
+    safe_limit = max(1, min(limit, 200))
+    return db.scalars(
+        select(models.CVSession).order_by(desc(models.CVSession.created_at)).limit(safe_limit)
+    ).all()
 
 
 def _deactivate_active_sessions(db: Session, *, keep_session_id: str | None = None) -> None:

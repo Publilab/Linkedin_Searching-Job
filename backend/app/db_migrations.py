@@ -27,6 +27,9 @@ _TABLE_COLUMNS: dict[str, list[tuple[str, str]]] = {
         ("llm_status", "TEXT NOT NULL DEFAULT 'fallback'"),
         ("llm_analysis_hash", "TEXT NULL"),
     ],
+    "sessions": [
+        ("analysis_executed_at", "DATETIME NULL"),
+    ],
 }
 
 _INDEXES = [

@@ -114,6 +114,7 @@ class CVSession(Base):
         ForeignKey("search_configs.id", ondelete="SET NULL"), nullable=True
     )
     ui_state_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    analysis_executed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)

@@ -8,6 +8,7 @@ from app.db import get_db
 from app.schemas import (
     SessionCloseIn,
     SessionCurrentOut,
+    SessionHistoryOut,
     SessionOut,
     SessionResumeIn,
     SessionStateUpdateIn,
@@ -15,6 +16,7 @@ from app.schemas import (
 from app.services.session_service import (
     close_session,
     get_current_session,
+    list_sessions,
     resume_session,
     update_session_state,
 )
@@ -31,6 +33,15 @@ def get_current(
     if not session:
         return SessionCurrentOut(session=None)
     return SessionCurrentOut(session=_to_session_out(session))
+
+
+@router.get("/history", response_model=SessionHistoryOut)
+def get_history(
+    limit: int = Query(default=50, ge=1, le=200),
+    db: Session = Depends(get_db),
+) -> SessionHistoryOut:
+    sessions = list_sessions(db, limit=limit)
+    return SessionHistoryOut(items=[_to_session_out(item) for item in sessions])
 
 
 @router.post("/resume", response_model=SessionOut)
@@ -91,9 +102,11 @@ def _to_session_out(session: models.CVSession) -> SessionOut:
     return SessionOut(
         session_id=session.id,
         cv_id=session.cv_id,
+        cv_filename=session.cv.filename if session.cv else None,
         active_search_id=session.active_search_id,
         ui_state=session.ui_state_json or {},
         status=session.status,
+        analysis_executed_at=session.analysis_executed_at,
         created_at=session.created_at,
         last_seen_at=session.last_seen_at,
     )

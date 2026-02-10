@@ -167,15 +167,21 @@ class SearchFacetsOut(BaseModel):
 class SessionOut(BaseModel):
     session_id: str
     cv_id: str
+    cv_filename: str | None = None
     active_search_id: str | None = None
     ui_state: dict = Field(default_factory=dict)
     status: str
+    analysis_executed_at: datetime | None = None
     created_at: datetime
     last_seen_at: datetime
 
 
 class SessionCurrentOut(BaseModel):
     session: SessionOut | None = None
+
+
+class SessionHistoryOut(BaseModel):
+    items: list[SessionOut] = Field(default_factory=list)
 
 
 class SessionResumeIn(BaseModel):

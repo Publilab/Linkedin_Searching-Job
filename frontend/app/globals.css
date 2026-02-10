@@ -95,6 +95,18 @@ button.secondary {
   border: 1px solid var(--border);
 }
 
+button.ai-reanalyze {
+  background: #8b5a00;
+  color: #fff;
+  border: 1px solid #6f4700;
+}
+
+button.ai-strategy {
+  background: #006b6b;
+  color: #fff;
+  border: 1px solid #005353;
+}
+
 button:disabled {
   opacity: 0.6;
   cursor: not-allowed;

@@ -43,7 +43,11 @@ async def upload_cv(file: UploadFile = File(...), db: Session = Depends(get_db))
         profile = db.scalar(
             select(models.CandidateProfile).where(models.CandidateProfile.cv_id == existing.id)
         )
-        session = create_session(db, cv_id=existing.id)
+        session = create_session(
+            db,
+            cv_id=existing.id,
+            analysis_executed_at=(profile.updated_at if profile else existing.created_at),
+        )
         db.commit()
         db.refresh(session)
         summary = (profile.summary_json if profile else {}) or {}
@@ -88,8 +92,10 @@ async def upload_cv(file: UploadFile = File(...), db: Session = Depends(get_db))
         llm_error=ai_bundle["llm_error"],
         confirmed_at=None,
     )
+    analysis_executed_at = datetime.utcnow()
+    profile.updated_at = analysis_executed_at
     db.add(profile)
-    session = create_session(db, cv_id=cv.id)
+    session = create_session(db, cv_id=cv.id, analysis_executed_at=analysis_executed_at)
     db.commit()
     db.refresh(cv)
     db.refresh(profile)
@@ -154,8 +160,11 @@ def update_cv_summary(
     profile.llm_prompt_version = ai_bundle["llm_prompt_version"]
     profile.llm_status = ai_bundle["llm_status"]
     profile.llm_error = ai_bundle["llm_error"]
+    analysis_executed_at = datetime.utcnow()
+    profile.updated_at = analysis_executed_at
 
     profile.confirmed_at = datetime.utcnow()
+    _touch_active_session_analysis(db, cv_id=cv_id, analysis_executed_at=analysis_executed_at)
 
     db.add(profile)
     db.commit()
@@ -190,6 +199,9 @@ def analyze_cv_summary(cv_id: str, db: Session = Depends(get_db)) -> CVSummaryOu
     profile.llm_prompt_version = ai_bundle["llm_prompt_version"]
     profile.llm_status = ai_bundle["llm_status"]
     profile.llm_error = ai_bundle["llm_error"]
+    analysis_executed_at = datetime.utcnow()
+    profile.updated_at = analysis_executed_at
+    _touch_active_session_analysis(db, cv_id=cv_id, analysis_executed_at=analysis_executed_at)
 
     db.add(profile)
     db.commit()
@@ -243,3 +255,17 @@ def _analysis_out(profile: models.CandidateProfile | None) -> CVAnalysisOut:
         llm_status=profile.llm_status or "fallback",
         llm_error=profile.llm_error,
     )
+
+
+def _touch_active_session_analysis(db: Session, *, cv_id: str, analysis_executed_at: datetime | None) -> None:
+    if analysis_executed_at is None:
+        return
+    session = db.scalar(
+        select(models.CVSession)
+        .where(models.CVSession.cv_id == cv_id, models.CVSession.status == "active")
+        .order_by(models.CVSession.last_seen_at.desc())
+    )
+    if not session:
+        return
+    session.analysis_executed_at = analysis_executed_at
+    db.add(session)
