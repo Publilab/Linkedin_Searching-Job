@@ -9,11 +9,15 @@ from sqlalchemy.orm import Session, sessionmaker
 from app import models
 from app.config import settings
 from app.services.job_ai_service import compute_job_content_hash, evaluate_job_fit
-from app.services.linkedin_scraper import scrape_jobs
+from app.services.job_sources import fetch_jobs, normalize_sources
+from app.services.linkedin_scraper import scrape_jobs as scrape_linkedin_jobs
 from app.services.matcher import compute_match
 
+# Backward-compatible alias used by tests that monkeypatch this symbol.
+scrape_jobs = scrape_linkedin_jobs
 
-def ensure_scheduler_state(db: Session, interval_minutes: int = 30) -> models.SchedulerState:
+
+def ensure_scheduler_state(db: Session, interval_minutes: int = 60) -> models.SchedulerState:
     state = db.get(models.SchedulerState, 1)
     if state:
         return state
@@ -66,6 +70,11 @@ def run_search_once(session_factory: sessionmaker, search_id: str, run_type: str
         search_city = search.city
         search_country = search.country
         effective_time_window_hours = 1 if run_type == "scheduled" else search.time_window_hours
+        search_sources = normalize_sources(search.sources_json or [])
+        if search.sources_json != search_sources:
+            search.sources_json = search_sources
+            db.add(search)
+            db.commit()
         run_id = run.id
         run_started_at = run.started_at
 
@@ -83,26 +92,39 @@ def run_search_once(session_factory: sessionmaker, search_id: str, run_type: str
         queries = _build_queries(profile_summary, profile.llm_strategy_json or {}, search.keywords_json or [])
         scraped_jobs: dict[str, dict] = {}
         for query in queries:
-            jobs = scrape_jobs(
-                keywords=query,
-                location=location,
-                time_window_hours=effective_time_window_hours,
-                max_results=30,
-            )
-            for job in jobs:
-                key = _dedupe_key(job)
-                if not key:
-                    continue
-                existing = scraped_jobs.get(key)
-                if not existing:
-                    scraped_jobs[key] = job
-                    continue
+            for source_id in search_sources:
+                if source_id == "linkedin_public":
+                    jobs = scrape_jobs(
+                        keywords=query,
+                        location=location,
+                        time_window_hours=effective_time_window_hours,
+                        max_results=30,
+                    )
+                else:
+                    jobs = fetch_jobs(
+                        source_id=source_id,
+                        keywords=query,
+                        location=location,
+                        city=search_city,
+                        country=search_country,
+                        time_window_hours=effective_time_window_hours,
+                        max_results=30,
+                    )
 
-                if int(existing.get("applicant_count") or 0) == 0 and int(job.get("applicant_count") or 0) > 0:
-                    scraped_jobs[key] = job
-                    continue
-                if len((job.get("description") or "")) > len((existing.get("description") or "")):
-                    scraped_jobs[key] = job
+                for job in jobs:
+                    key = _dedupe_key(job)
+                    if not key:
+                        continue
+                    existing = scraped_jobs.get(key)
+                    if not existing:
+                        scraped_jobs[key] = job
+                        continue
+
+                    if int(existing.get("applicant_count") or 0) == 0 and int(job.get("applicant_count") or 0) > 0:
+                        scraped_jobs[key] = job
+                        continue
+                    if len((job.get("description") or "")) > len((existing.get("description") or "")):
+                        scraped_jobs[key] = job
 
         new_found = 0
         eligible_found = 0

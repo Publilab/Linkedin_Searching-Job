@@ -15,6 +15,7 @@ from app.schemas import (
 )
 from app.services.session_service import (
     close_session,
+    delete_session_group,
     get_current_session,
     list_sessions,
     resume_session,
@@ -88,6 +89,14 @@ def close(payload: SessionCloseIn, db: Session = Depends(get_db)) -> SessionOut:
     return _to_session_out(session)
 
 
+@router.delete("/{session_id}")
+def delete_session(session_id: str, db: Session = Depends(get_db)) -> dict:
+    deleted = delete_session_group(db, session_id=session_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return {"ok": True}
+
+
 def _validate_search_for_session(db: Session, cv_id: str, active_search_id: str | None) -> None:
     if not active_search_id:
         return
@@ -99,10 +108,12 @@ def _validate_search_for_session(db: Session, cv_id: str, active_search_id: str 
 
 
 def _to_session_out(session: models.CVSession) -> SessionOut:
+    cv = session.cv
     return SessionOut(
         session_id=session.id,
         cv_id=session.cv_id,
-        cv_filename=session.cv.filename if session.cv else None,
+        cv_filename=cv.filename if cv else None,
+        candidate_name=_extract_candidate_name(cv.raw_text if cv else ""),
         active_search_id=session.active_search_id,
         ui_state=session.ui_state_json or {},
         status=session.status,
@@ -110,3 +121,18 @@ def _to_session_out(session: models.CVSession) -> SessionOut:
         created_at=session.created_at,
         last_seen_at=session.last_seen_at,
     )
+
+
+def _extract_candidate_name(raw_text: str) -> str | None:
+    for raw_line in (raw_text or "").splitlines():
+        line = " ".join(raw_line.strip().split())
+        if not line:
+            continue
+        if "@" in line or "http" in line.lower():
+            continue
+        if any(char.isdigit() for char in line):
+            continue
+        if len(line) > 80:
+            continue
+        return line
+    return None

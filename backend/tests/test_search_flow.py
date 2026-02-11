@@ -6,7 +6,32 @@ from sqlalchemy import select
 from app import models
 from app.db import SessionLocal
 from app.main import app
+from app.services.job_sources import normalize_sources
 from app.services.search_service import run_search_once
+
+
+def test_sources_endpoint_lists_allowed_sources():
+    with TestClient(app) as client:
+        response = client.get("/api/searches/sources")
+        assert response.status_code == 200
+        body = response.json()
+        assert isinstance(body, list)
+        sources = {item["source_id"]: item for item in body}
+        assert "linkedin_public" in sources
+        assert "bne_public" in sources
+        assert "empleos_publicos_public" in sources
+        assert "trabajando_public" in sources
+        assert "indeed_public" in sources
+        assert sources["linkedin_public"]["enabled"] is True
+        assert sources["bne_public"]["enabled"] is True
+        assert sources["empleos_publicos_public"]["enabled"] is True
+        assert sources["trabajando_public"]["enabled"] is False
+        assert sources["indeed_public"]["enabled"] is False
+
+
+def test_disabled_sources_are_ignored_in_normalization():
+    assert normalize_sources(["trabajando_public"]) == ["linkedin_public"]
+    assert normalize_sources(["indeed_public", "bne_public"]) == ["bne_public"]
 
 
 def test_search_flow_with_mocked_scraper(monkeypatch):
@@ -89,6 +114,148 @@ def test_search_flow_with_mocked_scraper(monkeypatch):
         facets = client.get(f"/api/searches/{body['search_id']}/facets")
         assert facets.status_code == 200
         assert "categories" in facets.json()
+
+
+def test_clear_results_endpoint_removes_search_results(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.cv_extract._extract_pdf",
+        lambda _: "Data Analyst\nSkills: Python, SQL\nEducation: Bachelor",
+    )
+
+    def fake_scrape_jobs(keywords, location, time_window_hours, **kwargs):
+        return [
+            {
+                "source": "linkedin_public",
+                "external_job_id": "clear-1",
+                "canonical_url": "https://www.linkedin.com/jobs/view/clear-1",
+                "canonical_url_hash": "h-clear-1",
+                "title": "Data Analyst",
+                "company": "Acme",
+                "location": "Santiago",
+                "description": "Python SQL analyst role",
+                "modality": "hybrid",
+                "easy_apply": True,
+                "applicant_count": 20,
+                "applicant_count_raw": "20 applicants",
+                "posted_at": None,
+            }
+        ]
+
+    monkeypatch.setattr("app.services.search_service.scrape_jobs", fake_scrape_jobs)
+
+    with TestClient(app) as client:
+        files = {"file": ("cv.pdf", BytesIO(b"clear-results"), "application/pdf")}
+        upload = client.post("/api/cv/upload", files=files)
+        assert upload.status_code == 200
+        cv_id = upload.json()["cv_id"]
+
+        created = client.post(
+            "/api/searches",
+            json={
+                "cv_id": cv_id,
+                "country": "Chile",
+                "city": "Santiago",
+                "time_window_hours": 24,
+                "keywords": ["Data Analyst"],
+            },
+        )
+        assert created.status_code == 200
+        search_id = created.json()["search_id"]
+
+        before = client.get(f"/api/searches/{search_id}/results")
+        assert before.status_code == 200
+        assert before.json()["total"] >= 1
+
+        cleared = client.delete(f"/api/searches/{search_id}/results")
+        assert cleared.status_code == 200
+        assert cleared.json()["deleted"] >= 1
+
+        after = client.get(f"/api/searches/{search_id}/results")
+        assert after.status_code == 200
+        assert after.json()["total"] == 0
+
+
+def test_search_respects_selected_sources(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.cv_extract._extract_pdf",
+        lambda _: "Public Administrator\nSkills: Policy, RRHH\nEducation: Administrador Publico",
+    )
+
+    def fake_linkedin_scrape(keywords, location, time_window_hours, **kwargs):
+        return [
+            {
+                "source": "linkedin_public",
+                "external_job_id": "li-1",
+                "canonical_url": "https://www.linkedin.com/jobs/view/li-1",
+                "canonical_url_hash": "h-li-1",
+                "title": "Policy Analyst",
+                "company": "LinkedIn Co",
+                "location": "Santiago",
+                "description": "Public policy role",
+                "modality": "hybrid",
+                "easy_apply": True,
+                "applicant_count": 12,
+                "applicant_count_raw": "12 applicants",
+                "posted_at": None,
+            }
+        ]
+
+    def fake_fetch_jobs(
+        *,
+        source_id,
+        keywords,
+        location,
+        city,
+        country,
+        time_window_hours,
+        max_results,
+    ):
+        if source_id != "bne_public":
+            return []
+        return [
+            {
+                "source": "bne_public",
+                "external_job_id": "bne-1",
+                "canonical_url": "https://www.bne.cl/oferta/bne-1",
+                "canonical_url_hash": "h-bne-1",
+                "title": "Analista de Politicas Publicas",
+                "company": "Servicio Publico",
+                "location": "Santiago, Metropolitana",
+                "description": "Rol sector publico",
+                "modality": "onsite",
+                "easy_apply": False,
+                "applicant_count": 0,
+                "applicant_count_raw": None,
+                "posted_at": None,
+            }
+        ]
+
+    monkeypatch.setattr("app.services.search_service.scrape_jobs", fake_linkedin_scrape)
+    monkeypatch.setattr("app.services.search_service.fetch_jobs", fake_fetch_jobs)
+
+    with TestClient(app) as client:
+        files = {"file": ("cv.pdf", BytesIO(b"dummy"), "application/pdf")}
+        cv_id = client.post("/api/cv/upload", files=files).json()["cv_id"]
+
+        created = client.post(
+            "/api/searches",
+            json={
+                "cv_id": cv_id,
+                "country": "Chile",
+                "city": "Santiago",
+                "time_window_hours": 24,
+                "keywords": ["public policy analyst"],
+                "sources": ["linkedin_public", "bne_public"],
+            },
+        )
+        assert created.status_code == 200
+        body = created.json()
+        source_ids = {item["source"] for item in body["results"]["items"]}
+        assert source_ids == {"linkedin_public", "bne_public"}
+
+        fetched = client.get(f"/api/searches/{body['search_id']}")
+        assert fetched.status_code == 200
+        assert fetched.json()["sources"] == ["linkedin_public", "bne_public"]
 
 
 def test_dedupe_prioritizes_external_job_id(monkeypatch):
@@ -217,6 +384,37 @@ def test_search_config_can_be_updated(monkeypatch):
         fetched_body = fetched.json()
         assert fetched_body["city"] == "Valparaiso"
         assert fetched_body["time_window_hours"] == 3
+
+
+def test_create_search_does_not_auto_start_scheduler(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.cv_extract._extract_pdf",
+        lambda _: "Public Administrator\nSkills: Policy, RRHH\nEducation: Administrador Publico",
+    )
+    monkeypatch.setattr("app.services.search_service.scrape_jobs", lambda **kwargs: [])
+
+    with TestClient(app) as client:
+        files = {"file": ("cv.pdf", BytesIO(b"dummy"), "application/pdf")}
+        cv_id = client.post("/api/cv/upload", files=files).json()["cv_id"]
+
+        stop = client.post("/api/scheduler/stop")
+        assert stop.status_code == 200
+
+        created = client.post(
+            "/api/searches",
+            json={
+                "cv_id": cv_id,
+                "country": "Chile",
+                "city": "Santiago",
+                "time_window_hours": 24,
+                "keywords": ["administrador publico"],
+            },
+        )
+        assert created.status_code == 200
+
+        status = client.get("/api/scheduler/status")
+        assert status.status_code == 200
+        assert status.json()["is_running"] is False
 
 
 def test_search_accepts_week_and_month_windows(monkeypatch):

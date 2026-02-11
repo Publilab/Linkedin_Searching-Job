@@ -5,10 +5,10 @@ Aplicacion local para:
 1. Subir CV en PDF/DOCX.
 2. Revisar/confirmar resumen estructurado.
 3. Analizar perfil con LLM externo (OpenAI GPT-5-mini por defecto, con fallback deterministico).
-4. Buscar ofertas publicas de LinkedIn sin login.
+4. Buscar ofertas en portales permitidos sin login (`LinkedIn public`, `BNE public` y `Empleos Públicos`).
 5. Calcular score hibrido por fit deterministico + fit LLM + recencia + ubicacion.
 6. Guardar resultados en SQLite con checklist y enlace de postulacion.
-7. Re-buscar en segundo plano cada 30 minutos y mostrar nuevas arriba.
+7. Re-buscar en segundo plano solo cuando se activa manualmente (default 60 minutos) y mostrar nuevas arriba.
 
 ## Estructura
 
@@ -87,6 +87,7 @@ NEXT_PUBLIC_API_BASE=http://localhost:8000/api npm run dev
 - `POST /api/session/resume`
 - `POST /api/session/close`
 - `POST /api/searches`
+- `GET /api/searches/sources`
 - `POST /api/searches/{search_id}/run`
 - `GET /api/searches/{search_id}/results`
 - `GET /api/searches/{search_id}/facets`
@@ -114,3 +115,12 @@ NEXT_PUBLIC_API_BASE=http://localhost:8000/api npm run dev
 ## Paginación de resultados
 
 - `GET /api/searches/{search_id}/results` soporta `page` (default `1`) y `page_size` (default `50`, max `200`).
+
+## Multi-portal permitido
+
+- Selector de portales en UI (`Búsqueda`) para elegir fuentes por corrida.
+- Columna `Fuente` en la tabla de resultados.
+- Filtros/facetas incluyen `source`.
+- Estado actual de conectores:
+  - Activos: `linkedin_public`, `bne_public`, `empleos_publicos_public`.
+  - Mostrados pero no activos: `trabajando_public`, `indeed_public` (requieren integración oficial/API).

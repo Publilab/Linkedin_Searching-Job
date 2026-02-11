@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from sqlalchemy import desc, select
+from sqlalchemy import delete as sa_delete
 from sqlalchemy.orm import Session
 
 from app import models
@@ -130,9 +131,35 @@ def update_session_state(
 
 def list_sessions(db: Session, *, limit: int = 50) -> list[models.CVSession]:
     safe_limit = max(1, min(limit, 200))
-    return db.scalars(
-        select(models.CVSession).order_by(desc(models.CVSession.created_at)).limit(safe_limit)
-    ).all()
+    rows = db.scalars(select(models.CVSession).order_by(desc(models.CVSession.created_at))).all()
+    out: list[models.CVSession] = []
+    seen_cv_ids: set[str] = set()
+    for session in rows:
+        if session.cv_id in seen_cv_ids:
+            continue
+        seen_cv_ids.add(session.cv_id)
+        out.append(session)
+        if len(out) >= safe_limit:
+            break
+    return out
+
+
+def get_latest_session_for_cv(db: Session, *, cv_id: str) -> models.CVSession | None:
+    return db.scalar(
+        select(models.CVSession)
+        .where(models.CVSession.cv_id == cv_id)
+        .order_by(desc(models.CVSession.created_at))
+    )
+
+
+def delete_session_group(db: Session, *, session_id: str) -> bool:
+    target = db.get(models.CVSession, session_id)
+    if not target:
+        return False
+
+    db.execute(sa_delete(models.CVSession).where(models.CVSession.cv_id == target.cv_id))
+    db.commit()
+    return True
 
 
 def _deactivate_active_sessions(db: Session, *, keep_session_id: str | None = None) -> None:

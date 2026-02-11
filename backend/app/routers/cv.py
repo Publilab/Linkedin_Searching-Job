@@ -22,7 +22,7 @@ from app.services.cv_extract import extract_text_from_upload
 from app.services.cv_summary import summarize_cv_text
 from app.services.market_demand_service import build_search_strategy
 from app.services.profile_ai_service import analyze_profile
-from app.services.session_service import create_session
+from app.services.session_service import create_session, get_latest_session_for_cv, resume_session
 
 router = APIRouter(prefix="/cv", tags=["cv"])
 
@@ -43,13 +43,24 @@ async def upload_cv(file: UploadFile = File(...), db: Session = Depends(get_db))
         profile = db.scalar(
             select(models.CandidateProfile).where(models.CandidateProfile.cv_id == existing.id)
         )
-        session = create_session(
-            db,
-            cv_id=existing.id,
-            analysis_executed_at=(profile.updated_at if profile else existing.created_at),
-        )
-        db.commit()
-        db.refresh(session)
+        latest_session = get_latest_session_for_cv(db, cv_id=existing.id)
+        if latest_session:
+            session = resume_session(db, session_id=latest_session.id)
+            if not session:
+                raise HTTPException(status_code=500, detail="Could not restore existing session")
+            if profile:
+                session.analysis_executed_at = profile.updated_at
+                db.add(session)
+                db.commit()
+                db.refresh(session)
+        else:
+            session = create_session(
+                db,
+                cv_id=existing.id,
+                analysis_executed_at=(profile.updated_at if profile else existing.created_at),
+            )
+            db.commit()
+            db.refresh(session)
         summary = (profile.summary_json if profile else {}) or {}
         return CVUploadOut(
             cv_id=existing.id,

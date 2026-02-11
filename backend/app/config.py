@@ -14,7 +14,7 @@ class Settings(BaseSettings):
         "http://127.0.0.1:3000",
     ])
 
-    scheduler_interval_minutes: int = 30
+    scheduler_interval_minutes: int = 60
     scheduler_poll_seconds: int = 15
 
     default_search_limit: int = 50

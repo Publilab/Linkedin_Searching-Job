@@ -7,14 +7,19 @@ const SESSION_STORAGE_KEY = "linkedin_cv_session_id";
 
 const I18N = {
   es: {
-    title: "Buscador LinkedIn desde CV",
+    title: "SeekJob",
     subtitle: "Sube CV, revisa análisis IA y prioriza ofertas por mejor encaje.",
+    tabA: "Buscador LinkedIn desde CV | Segundo plano | Resumen del CV",
+    tabB: "Sesiones previas",
+    tabC: "Análisis IA del perfil",
+    tabD: "Búsqueda | Resultados",
     upload: "Subir CV",
     summary: "Resumen del CV",
     analysis: "Análisis IA del perfil",
     strategy: "Estrategia de búsqueda",
     loadStrategy: "Actualizar estrategia",
     search: "Búsqueda",
+    portals: "Portales permitidos",
     results: "Resultados",
     scheduler: "Segundo plano",
     runSearch: "Buscar ahora",
@@ -29,7 +34,9 @@ const I18N = {
     selectAll: "Seleccionar todos",
     deselectAll: "Deseleccionar todos",
     deleteSelected: "Borrar seleccionadas",
+    clearResults: "Limpiar resultados",
     addToSearch: "Agregar",
+    source: "Fuente",
     page: "Página",
     of: "de",
     total: "Total",
@@ -42,16 +49,23 @@ const I18N = {
     createdAt: "Sesión creada",
     status: "Estado",
     resume: "Retomar",
+    candidateName: "Nombre CV",
+    deleteSession: "Borrar",
   },
   en: {
-    title: "LinkedIn Job Finder from CV",
+    title: "SeekJob",
     subtitle: "Upload CV, review AI analysis, and prioritize jobs by best fit.",
+    tabA: "LinkedIn CV Finder | Background | CV Summary",
+    tabB: "Previous sessions",
+    tabC: "AI profile analysis",
+    tabD: "Search | Results",
     upload: "Upload CV",
     summary: "CV Summary",
     analysis: "AI Profile Analysis",
     strategy: "Search strategy",
     loadStrategy: "Refresh strategy",
     search: "Search",
+    portals: "Allowed portals",
     results: "Results",
     scheduler: "Background",
     runSearch: "Search now",
@@ -66,7 +80,9 @@ const I18N = {
     selectAll: "Select all",
     deselectAll: "Deselect all",
     deleteSelected: "Delete selected",
+    clearResults: "Clear results",
     addToSearch: "Add",
+    source: "Source",
     page: "Page",
     of: "of",
     total: "Total",
@@ -79,6 +95,8 @@ const I18N = {
     createdAt: "Session created",
     status: "Status",
     resume: "Resume",
+    candidateName: "CV name",
+    deleteSession: "Delete",
   },
 };
 
@@ -215,9 +233,34 @@ function formatDateTime(value) {
   return date.toLocaleString();
 }
 
+function normalizeSourceSelection(values, available = []) {
+  const allowed = new Set(
+    (available || [])
+      .filter((item) => item?.enabled !== false)
+      .map((item) => item?.source_id)
+      .filter(Boolean),
+  );
+  const out = [];
+  const seen = new Set();
+  for (const value of values || []) {
+    const sourceId = String(value || "").trim();
+    if (!sourceId) continue;
+    if (allowed.size > 0 && !allowed.has(sourceId)) continue;
+    if (seen.has(sourceId)) continue;
+    seen.add(sourceId);
+    out.push(sourceId);
+  }
+  if (out.length === 0 && available.length > 0) {
+    const firstEnabled = (available || []).find((item) => item?.enabled !== false && item?.source_id);
+    return firstEnabled ? [firstEnabled.source_id] : [];
+  }
+  return out;
+}
+
 export default function Home() {
   const [lang, setLang] = useState("es");
   const t = I18N[lang];
+  const [activeTab, setActiveTab] = useState("a");
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -258,11 +301,14 @@ export default function Home() {
   const [country, setCountry] = useState("");
   const [city, setCity] = useState("");
   const [timeWindow, setTimeWindow] = useState("24");
+  const [availableSources, setAvailableSources] = useState([]);
+  const [selectedSources, setSelectedSources] = useState(["linkedin_public"]);
   const [queryItems, setQueryItems] = useState([]);
   const [suggestedQueries, setSuggestedQueries] = useState([]);
   const [newQuery, setNewQuery] = useState("");
 
   const [sortBy, setSortBy] = useState("newest");
+  const [sourceFilter, setSourceFilter] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("");
   const [subcategoryFilter, setSubcategoryFilter] = useState("");
   const [maxPostedHours, setMaxPostedHours] = useState("");
@@ -280,13 +326,14 @@ export default function Home() {
   const [resultsPage, setResultsPage] = useState(1);
   const [resultsPageSize, setResultsPageSize] = useState("50");
   const [facets, setFacets] = useState({
+    sources: {},
     categories: {},
     subcategories: {},
     modalities: {},
     locations: {},
     posted_buckets: {},
   });
-  const [scheduler, setScheduler] = useState({ is_running: false, interval_minutes: 30, last_tick_at: null });
+  const [scheduler, setScheduler] = useState({ is_running: false, interval_minutes: 60, last_tick_at: null });
 
   const summaryText = useMemo(
     () => ({
@@ -321,6 +368,13 @@ export default function Home() {
     setSessionHistory(out.items || []);
   };
 
+  const refreshSources = async () => {
+    const out = await api("/searches/sources");
+    const items = Array.isArray(out) ? out : [];
+    setAvailableSources(items);
+    setSelectedSources((prev) => normalizeSourceSelection(prev, items));
+  };
+
   const loadSessionSnapshot = async (session) => {
     if (!session) return;
 
@@ -340,11 +394,20 @@ export default function Home() {
     }
 
     if (session.active_search_id) {
+      try {
+        const searchOut = await api(`/searches/${session.active_search_id}`);
+        setSelectedSources((prev) =>
+          normalizeSourceSelection(searchOut?.sources?.length ? searchOut.sources : prev, availableSources),
+        );
+      } catch {
+        // noop
+      }
       await refreshResults(session.active_search_id);
       await refreshFacets(session.active_search_id);
     } else {
       setResults([]);
       setFacets({
+        sources: {},
         categories: {},
         subcategories: {},
         modalities: {},
@@ -366,6 +429,7 @@ export default function Home() {
   const buildResultsPath = (targetSearchId) => {
     const params = new URLSearchParams();
     params.set("sort_by", sortBy);
+    if (sourceFilter) params.set("source", sourceFilter);
     if (categoryFilter) params.set("category", categoryFilter);
     if (subcategoryFilter) params.set("subcategory", subcategoryFilter);
     if (maxPostedHours) params.set("max_posted_hours", maxPostedHours);
@@ -401,6 +465,7 @@ export default function Home() {
     if (typeof uiState.city === "string") setCity(uiState.city);
     if (uiState.time_window_hours != null) setTimeWindow(String(uiState.time_window_hours));
     if (typeof uiState.sort_by === "string") setSortBy(uiState.sort_by);
+    if (typeof uiState.source === "string") setSourceFilter(uiState.source);
     if (typeof uiState.category === "string") setCategoryFilter(uiState.category);
     if (typeof uiState.subcategory === "string") setSubcategoryFilter(uiState.subcategory);
     if (typeof uiState.max_posted_hours === "string") setMaxPostedHours(uiState.max_posted_hours);
@@ -411,6 +476,9 @@ export default function Home() {
     if (Array.isArray(uiState.query_items)) {
       setQueryItems(mergeQueryItems([], uiState.query_items, { enabled: true, source: "session" }));
     }
+    if (Array.isArray(uiState.sources)) {
+      setSelectedSources(normalizeSourceSelection(uiState.sources, availableSources));
+    }
     if (Array.isArray(uiState.suggested_queries)) {
       setSuggestedQueries(mergeSuggestionItems([], uiState.suggested_queries, { source: "session" }));
     }
@@ -420,6 +488,7 @@ export default function Home() {
   useEffect(() => {
     refreshScheduler().catch(() => null);
     refreshSessionHistory().catch(() => null);
+    refreshSources().catch(() => null);
   }, []);
 
   useEffect(() => {
@@ -478,9 +547,11 @@ export default function Home() {
         country,
         city,
         time_window_hours: Number(timeWindow) || 24,
+        sources: selectedSources,
         query_items: queryItems,
         suggested_queries: suggestedQueries,
         sort_by: sortBy,
+        source: sourceFilter,
         category: categoryFilter,
         subcategory: subcategoryFilter,
         max_posted_hours: maxPostedHours,
@@ -508,9 +579,11 @@ export default function Home() {
     country,
     city,
     timeWindow,
+    selectedSources,
     queryItems,
     suggestedQueries,
     sortBy,
+    sourceFilter,
     categoryFilter,
     subcategoryFilter,
     maxPostedHours,
@@ -523,7 +596,7 @@ export default function Home() {
   useEffect(() => {
     if (!searchId) return;
     refreshResults(searchId).catch(() => null);
-  }, [searchId, sortBy, categoryFilter, subcategoryFilter, maxPostedHours, locationContains, resultsPage, resultsPageSize]);
+  }, [searchId, sortBy, sourceFilter, categoryFilter, subcategoryFilter, maxPostedHours, locationContains, resultsPage, resultsPageSize]);
 
   useEffect(() => {
     if (!searchId) return;
@@ -533,7 +606,7 @@ export default function Home() {
       refreshFacets(searchId).catch(() => null);
     }, 30000);
     return () => clearInterval(id);
-  }, [searchId, sortBy, categoryFilter, subcategoryFilter, maxPostedHours, locationContains, resultsPage, resultsPageSize]);
+  }, [searchId, sortBy, sourceFilter, categoryFilter, subcategoryFilter, maxPostedHours, locationContains, resultsPage, resultsPageSize]);
 
   useEffect(() => {
     if (resultsMeta.total_pages > 0 && resultsPage > resultsMeta.total_pages) {
@@ -605,6 +678,7 @@ export default function Home() {
   const createSearch = () =>
     run(async () => {
       if (!cvId) throw new Error("Upload and confirm CV first");
+      if (selectedSources.length === 0) throw new Error("Select at least one source");
       const enabledKeywords = activeQueryList(queryItems);
       if (enabledKeywords.length === 0) {
         throw new Error("Add at least one enabled query");
@@ -619,6 +693,7 @@ export default function Home() {
           city: city || null,
           time_window_hours: Number(timeWindow),
           keywords: enabledKeywords,
+          sources: selectedSources,
         }),
       });
 
@@ -632,6 +707,7 @@ export default function Home() {
   const rerunSearch = () =>
     run(async () => {
       if (!searchId) throw new Error("Create search first");
+      if (selectedSources.length === 0) throw new Error("Select at least one source");
       const enabledKeywords = activeQueryList(queryItems);
       if (enabledKeywords.length === 0) {
         throw new Error("Add at least one enabled query");
@@ -644,6 +720,7 @@ export default function Home() {
           city: city || null,
           time_window_hours: Number(timeWindow),
           keywords: enabledKeywords,
+          sources: selectedSources,
         }),
       });
       await api(`/searches/${searchId}/run`, { method: "POST" });
@@ -678,12 +755,29 @@ export default function Home() {
       await refreshResults(searchId);
     });
 
+  const clearSearchResults = () =>
+    run(async () => {
+      if (!searchId) throw new Error("Create search first");
+      await api(`/searches/${searchId}/results`, { method: "DELETE" });
+      setResults([]);
+      setResultsMeta({
+        total: 0,
+        page: 1,
+        page_size: Number(resultsPageSize) || 50,
+        total_pages: 0,
+        has_prev: false,
+        has_next: false,
+      });
+      setResultsPage(1);
+      await refreshFacets(searchId);
+    });
+
   const startScheduler = () =>
     run(async () => {
       const out = await api("/scheduler/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ interval_minutes: 30 }),
+        body: JSON.stringify({ interval_minutes: 60 }),
       });
       setScheduler(out);
     });
@@ -705,6 +799,73 @@ export default function Home() {
       await loadSessionSnapshot(resumed);
       await refreshSessionHistory();
     });
+
+  const deleteFromHistory = (targetSessionId) =>
+    run(async () => {
+      if (!targetSessionId) return;
+      await api(`/session/${targetSessionId}`, { method: "DELETE" });
+      if (targetSessionId === sessionId) {
+        setSessionId("");
+        setCvId("");
+        setSearchId("");
+        setResults([]);
+        setStrategy({
+          role_focus: [],
+          recommended_queries: [],
+          market_roles: [],
+        });
+        setQueryItems([]);
+        setSuggestedQueries([]);
+        setSummary({
+          highlights: [],
+          skills: [],
+          experience: [],
+          education: [],
+          languages: [],
+        });
+        setAnalysis({
+          target_roles: [],
+          secondary_roles: [],
+          seniority: "unknown",
+          industries: [],
+          strengths: [],
+          skill_gaps: [],
+          recommended_queries: [],
+          llm_status: "fallback",
+          llm_error: null,
+        });
+        try {
+          localStorage.removeItem(SESSION_STORAGE_KEY);
+        } catch {
+          // noop
+        }
+      }
+      await refreshSessionHistory();
+    });
+
+  const toggleSearchSource = (sourceId, enabled) => {
+    const cleanId = String(sourceId || "").trim();
+    if (!cleanId) return;
+    setSelectedSources((prev) => {
+      const has = prev.includes(cleanId);
+      if (enabled && !has) return [...prev, cleanId];
+      if (!enabled && has) return prev.filter((item) => item !== cleanId);
+      return prev;
+    });
+  };
+
+  const selectAllSources = () => {
+    setSelectedSources(
+      (availableSources || [])
+        .filter((item) => item?.enabled !== false)
+        .map((item) => item.source_id)
+        .filter(Boolean),
+    );
+  };
+
+  const deselectAllSources = () => {
+    setSelectedSources([]);
+  };
 
   const addRecommendedQuery = (query) => {
     const normalized = normalizeQuery(query);
@@ -767,6 +928,7 @@ export default function Home() {
 
   const enabledQueryCount = activeQueryList(queryItems).length;
 
+  const sourceOptions = Object.keys(facets.sources || {}).sort();
   const categoryOptions = Object.keys(facets.categories || {}).sort();
   const subcategoryOptions = Object.keys(facets.subcategories || {}).sort();
 
@@ -785,7 +947,38 @@ export default function Home() {
         {error ? <div className="alert">{error}</div> : null}
       </div>
 
-      <div className="grid two">
+      <div className="tabs" role="tablist" aria-label="Main app sections">
+        <button
+          type="button"
+          className={`tab-button${activeTab === "a" ? " active" : ""}`}
+          onClick={() => setActiveTab("a")}
+        >
+          {t.tabA}
+        </button>
+        <button
+          type="button"
+          className={`tab-button${activeTab === "b" ? " active" : ""}`}
+          onClick={() => setActiveTab("b")}
+        >
+          {t.tabB}
+        </button>
+        <button
+          type="button"
+          className={`tab-button${activeTab === "c" ? " active" : ""}`}
+          onClick={() => setActiveTab("c")}
+        >
+          {t.tabC}
+        </button>
+        <button
+          type="button"
+          className={`tab-button${activeTab === "d" ? " active" : ""}`}
+          onClick={() => setActiveTab("d")}
+        >
+          {t.tabD}
+        </button>
+      </div>
+
+      {activeTab === "a" ? <div className="grid two">
         <section className="card">
           <h2>{t.upload}</h2>
           <label>
@@ -810,9 +1003,9 @@ export default function Home() {
             <button className="secondary" onClick={stopScheduler} disabled={busy}>Stop</button>
           </div>
         </section>
-      </div>
+      </div> : null}
 
-      <section className="card" style={{ marginTop: 14 }}>
+      {activeTab === "b" ? <section className="card" style={{ marginTop: 14 }}>
         <h2>{t.sessionHistory}</h2>
         <div style={{ display: "grid", gap: 8 }}>
           {sessionHistory.length === 0 ? (
@@ -823,11 +1016,14 @@ export default function Home() {
                 key={item.session_id}
                 className="row"
                 style={{
-                  gridTemplateColumns: "1.2fr 1fr 1fr auto",
+                  gridTemplateColumns: "1fr 1fr 1fr 1fr auto",
                   gap: 8,
                   alignItems: "center",
                 }}
               >
+                <div className="small">
+                  <strong>{t.candidateName}:</strong> {item.candidate_name || "-"}
+                </div>
                 <div className="small">
                   <strong>{t.fileName}:</strong> {item.cv_filename || "-"}
                 </div>
@@ -839,21 +1035,31 @@ export default function Home() {
                   <br />
                   <strong>{t.status}:</strong> {item.status || "-"}
                 </div>
-                <button
-                  type="button"
-                  className="secondary"
-                  disabled={busy || !item.session_id || item.session_id === sessionId}
-                  onClick={() => resumeFromHistory(item.session_id)}
-                >
-                  {t.resume}
-                </button>
+                <div className="toolbar" style={{ marginTop: 0 }}>
+                  <button
+                    type="button"
+                    className="secondary"
+                    disabled={busy || !item.session_id || item.session_id === sessionId}
+                    onClick={() => resumeFromHistory(item.session_id)}
+                  >
+                    {t.resume}
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary"
+                    disabled={busy || !item.session_id}
+                    onClick={() => deleteFromHistory(item.session_id)}
+                  >
+                    {t.deleteSession}
+                  </button>
+                </div>
               </div>
             ))
           )}
         </div>
-      </section>
+      </section> : null}
 
-      <section className="card" style={{ marginTop: 14 }}>
+      {activeTab === "c" ? <section className="card" style={{ marginTop: 14 }}>
         <h2>{t.analysis}</h2>
         <p className="small">LLM status: <strong>{analysis.llm_status || "fallback"}</strong></p>
         {analysis.llm_error ? <p className="small"><strong>LLM error:</strong> {analysis.llm_error}</p> : null}
@@ -908,9 +1114,9 @@ export default function Home() {
           <button className="ai-reanalyze" onClick={reanalyze} disabled={busy || !cvId}>{t.reanalyze}</button>
           <button className="ai-strategy" onClick={() => run(() => refreshStrategy(cvId))} disabled={busy || !cvId}>{t.loadStrategy}</button>
         </div>
-      </section>
+      </section> : null}
 
-      <section className="card" style={{ marginTop: 14 }}>
+      {activeTab === "a" ? <section className="card" style={{ marginTop: 14 }}>
         <h2>{t.summary}</h2>
         <p className="small">Edita libremente: una línea por elemento en cada campo.</p>
         <div className="grid two">
@@ -953,9 +1159,9 @@ export default function Home() {
         <div className="toolbar">
           <button onClick={saveSummary} disabled={busy || !cvId}>{t.saveSummary}</button>
         </div>
-      </section>
+      </section> : null}
 
-      <section className="card" style={{ marginTop: 14 }}>
+      {activeTab === "d" ? <section className="card" style={{ marginTop: 14 }}>
         <h2>{t.search}</h2>
         <div className="row">
           <label>
@@ -978,6 +1184,48 @@ export default function Home() {
               <option value="720">1m</option>
             </select>
           </label>
+        </div>
+        <div style={{ marginTop: 8 }}>
+          <p className="small" style={{ margin: 0, marginBottom: 6 }}>{t.portals}</p>
+          <div className="toolbar" style={{ marginTop: 6 }}>
+            <button
+              type="button"
+              className="secondary"
+              disabled={availableSources.length === 0}
+              onClick={selectAllSources}
+            >
+              {t.selectAll}
+            </button>
+            <button
+              type="button"
+              className="secondary"
+              disabled={availableSources.length === 0}
+              onClick={deselectAllSources}
+            >
+              {t.deselectAll}
+            </button>
+          </div>
+          <div style={{ marginTop: 8, display: "grid", gap: 6 }}>
+            {availableSources.length === 0 ? (
+              <p className="small">No sources available.</p>
+            ) : (
+              availableSources.map((item) => (
+                <label key={item.source_id} className="row" style={{ gridTemplateColumns: "auto 1fr", gap: 8 }}>
+                  <input
+                    type="checkbox"
+                    checked={selectedSources.includes(item.source_id)}
+                    disabled={item.enabled === false}
+                    onChange={(e) => toggleSearchSource(item.source_id, e.target.checked)}
+                  />
+                  <span className="small">
+                    <strong>{item.label}</strong>
+                    {item.description ? ` - ${item.description}` : ""}
+                    {item.enabled === false && item.status_note ? ` (${item.status_note})` : ""}
+                  </span>
+                </label>
+              ))
+            )}
+          </div>
         </div>
         <div>
           <p className="small" style={{ margin: 0, marginBottom: 6 }}>{t.activeQueries}</p>
@@ -1049,9 +1297,9 @@ export default function Home() {
           <button className="secondary" onClick={rerunSearch} disabled={busy || !searchId}>Run Again</button>
           <span className="small">Search ID: {searchId || "-"}</span>
         </div>
-      </section>
+      </section> : null}
 
-      <section className="card" style={{ marginTop: 14 }}>
+      {activeTab === "d" ? <section className="card" style={{ marginTop: 14 }}>
         <h2>{t.results}</h2>
         <div className="row">
           <label>
@@ -1065,6 +1313,21 @@ export default function Home() {
             >
               <option value="newest">Newest</option>
               <option value="best_fit">Best Fit</option>
+            </select>
+          </label>
+          <label>
+            {t.source}
+            <select
+              value={sourceFilter}
+              onChange={(e) => {
+                setSourceFilter(e.target.value);
+                setResultsPage(1);
+              }}
+            >
+              <option value="">All</option>
+              {sourceOptions.map((key) => (
+                <option key={key} value={key}>{key} ({facets.sources[key]})</option>
+              ))}
             </select>
           </label>
           <label>
@@ -1159,6 +1422,14 @@ export default function Home() {
           >
             {t.deselectAll}
           </button>
+          <button
+            type="button"
+            className="secondary"
+            disabled={busy || !searchId || resultsMeta.total === 0}
+            onClick={clearSearchResults}
+          >
+            {t.clearResults}
+          </button>
           <span className="small">
             {t.total}: {resultsMeta.total}
           </span>
@@ -1189,6 +1460,7 @@ export default function Home() {
               <tr>
                 <th>Check</th>
                 <th>Title</th>
+                <th>{t.source}</th>
                 <th>Category</th>
                 <th>Subcategory</th>
                 <th>Description</th>
@@ -1205,7 +1477,7 @@ export default function Home() {
             <tbody>
               {results.length === 0 ? (
                 <tr>
-                  <td colSpan={13} className="small">No results yet.</td>
+                  <td colSpan={14} className="small">No results yet.</td>
                 </tr>
               ) : (
                 results.map((row) => (
@@ -1223,6 +1495,7 @@ export default function Home() {
                       <div className="small">posted: {row.posted_age_hours == null ? "-" : `${row.posted_age_hours}h`}</div>
                       {row.is_new ? <span className="badge">NEW</span> : null}
                     </td>
+                    <td>{row.source || "-"}</td>
                     <td>{row.job_category || "-"}</td>
                     <td>{row.job_subcategory || "-"}</td>
                     <td className="small">{row.description?.slice(0, 220) || "-"}</td>
@@ -1244,7 +1517,7 @@ export default function Home() {
             </tbody>
           </table>
         </div>
-      </section>
+      </section> : null}
     </main>
   );
 }

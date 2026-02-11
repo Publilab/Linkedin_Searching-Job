@@ -17,12 +17,14 @@ from app.schemas import (
     SearchCreateIn,
     SearchCreateOut,
     SearchFacetsOut,
+    SearchSourceOut,
     SearchUpdateIn,
     SearchResultsOut,
     SearchResultOut,
     SearchRunOut,
 )
-from app.services.search_service import run_search_once, set_scheduler_running
+from app.services.job_sources import list_allowed_sources, normalize_sources
+from app.services.search_service import run_search_once
 from app.services.session_service import update_session_state
 
 router = APIRouter(prefix="/searches", tags=["searches"])
@@ -34,6 +36,7 @@ def _serialize_results(
     *,
     only_new: bool = False,
     sort_by: Literal["newest", "best_fit"] = "newest",
+    source: str | None = None,
     category: str | None = None,
     subcategory: str | None = None,
     max_posted_hours: float | None = None,
@@ -51,6 +54,8 @@ def _serialize_results(
 
     if only_new:
         stmt = stmt.where(models.SearchResult.is_new.is_(True))
+    if source:
+        stmt = stmt.where(models.JobPosting.source == source)
     if category:
         stmt = stmt.where(models.JobPosting.job_category == category)
     if subcategory:
@@ -77,6 +82,7 @@ def _serialize_results(
             SearchResultOut(
                 result_id=result.id,
                 job_id=job.id,
+                source=job.source,
                 title=job.title,
                 company=job.company,
                 description=job.description,
@@ -128,6 +134,20 @@ def _serialize_results(
     )
 
 
+@router.get("/sources", response_model=list[SearchSourceOut])
+def get_allowed_sources() -> list[SearchSourceOut]:
+    return [
+        SearchSourceOut(
+            source_id=item.source_id,
+            label=item.label,
+            description=item.description,
+            enabled=bool(item.enabled),
+            status_note=item.status_note,
+        )
+        for item in list_allowed_sources()
+    ]
+
+
 @router.post("", response_model=SearchCreateOut)
 async def create_search(payload: SearchCreateIn, db: Session = Depends(get_db)) -> SearchCreateOut:
     cv = db.get(models.CVDocument, payload.cv_id)
@@ -138,12 +158,15 @@ async def create_search(payload: SearchCreateIn, db: Session = Depends(get_db)) 
     if not profile:
         raise HTTPException(status_code=400, detail="CV summary must exist before searching")
 
+    sources = normalize_sources(payload.sources)
+
     search = models.SearchConfig(
         cv_id=payload.cv_id,
         country=payload.country,
         city=payload.city,
         time_window_hours=payload.time_window_hours,
         keywords_json=payload.keywords,
+        sources_json=sources,
         active=True,
     )
     db.add(search)
@@ -157,8 +180,6 @@ async def create_search(payload: SearchCreateIn, db: Session = Depends(get_db)) 
     )
     if active_session:
         update_session_state(db, session_id=active_session.id, active_search_id=search.id)
-
-    set_scheduler_running(db, running=True)
 
     run_data = await asyncio.to_thread(run_search_once, SessionLocal, search.id, "manual")
 
@@ -194,6 +215,8 @@ def update_search(
         search.time_window_hours = updates["time_window_hours"]
     if "keywords" in updates:
         search.keywords_json = updates["keywords"] or []
+    if "sources" in updates:
+        search.sources_json = normalize_sources(updates["sources"] or [])
     if "active" in updates:
         search.active = bool(updates["active"])
 
@@ -218,6 +241,7 @@ def get_results(
     search_id: str,
     only_new: bool = Query(default=False),
     sort_by: Literal["newest", "best_fit"] = Query(default="newest"),
+    source: str | None = Query(default=None),
     category: str | None = Query(default=None),
     subcategory: str | None = Query(default=None),
     max_posted_hours: float | None = Query(default=None, ge=0),
@@ -235,6 +259,7 @@ def get_results(
         search_id,
         only_new=only_new,
         sort_by=sort_by,
+        source=source,
         category=category,
         subcategory=subcategory,
         max_posted_hours=max_posted_hours,
@@ -242,6 +267,23 @@ def get_results(
         page=page,
         page_size=page_size,
     )
+
+
+@router.delete("/{search_id}/results", response_model=dict)
+def clear_results(search_id: str, db: Session = Depends(get_db)) -> dict:
+    search = db.get(models.SearchConfig, search_id)
+    if not search:
+        raise HTTPException(status_code=404, detail="Search not found")
+
+    rows = db.scalars(
+        select(models.SearchResult).where(models.SearchResult.search_config_id == search_id)
+    ).all()
+    deleted = len(rows)
+    for row in rows:
+        db.delete(row)
+    db.commit()
+
+    return {"search_id": search_id, "deleted": deleted}
 
 
 @router.get("/{search_id}/new-count", response_model=dict)
@@ -282,6 +324,7 @@ def get_facets(search_id: str, db: Session = Depends(get_db)) -> SearchFacetsOut
     subcategories: dict[str, int] = {}
     modalities: dict[str, int] = {}
     locations: dict[str, int] = {}
+    sources: dict[str, int] = {}
     posted_buckets = {"1h": 0, "3h": 0, "8h": 0, "24h": 0, "72h": 0, "168h": 0, "720h": 0, "older": 0, "unknown": 0}
 
     for _, job in rows:
@@ -289,6 +332,7 @@ def get_facets(search_id: str, db: Session = Depends(get_db)) -> SearchFacetsOut
         _inc(subcategories, job.job_subcategory or "Other")
         _inc(modalities, job.modality or "unknown")
         _inc(locations, job.location or "unknown")
+        _inc(sources, job.source or "unknown")
 
         age = _posted_age_hours(job.posted_at, now)
         if age is None:
@@ -315,6 +359,7 @@ def get_facets(search_id: str, db: Session = Depends(get_db)) -> SearchFacetsOut
         subcategories=subcategories,
         modalities=modalities,
         locations=locations,
+        sources=sources,
         posted_buckets=posted_buckets,
     )
 
@@ -381,5 +426,6 @@ def _search_config_out(search: models.SearchConfig) -> SearchConfigOut:
         city=search.city,
         time_window_hours=search.time_window_hours,
         keywords=search.keywords_json or [],
+        sources=normalize_sources(search.sources_json or []),
         active=bool(search.active),
     )

@@ -67,6 +67,7 @@ class SearchCreateIn(BaseModel):
     city: str | None = None
     time_window_hours: Literal[1, 3, 8, 24, 72, 168, 720] = 24
     keywords: list[str] = Field(default_factory=list)
+    sources: list[str] = Field(default_factory=list)
 
 
 class SearchUpdateIn(BaseModel):
@@ -74,6 +75,7 @@ class SearchUpdateIn(BaseModel):
     city: str | None = None
     time_window_hours: Literal[1, 3, 8, 24, 72, 168, 720] | None = None
     keywords: list[str] | None = None
+    sources: list[str] | None = None
     active: bool | None = None
 
 
@@ -84,7 +86,16 @@ class SearchConfigOut(BaseModel):
     city: str | None = None
     time_window_hours: int
     keywords: list[str] = Field(default_factory=list)
+    sources: list[str] = Field(default_factory=list)
     active: bool
+
+
+class SearchSourceOut(BaseModel):
+    source_id: str
+    label: str
+    description: str | None = None
+    enabled: bool = True
+    status_note: str | None = None
 
 
 class SearchRunOut(BaseModel):
@@ -100,6 +111,7 @@ class SearchRunOut(BaseModel):
 class SearchResultOut(BaseModel):
     result_id: str
     job_id: str
+    source: str
     title: str
     company: str | None = None
     description: str
@@ -161,6 +173,7 @@ class SearchFacetsOut(BaseModel):
     subcategories: dict[str, int] = Field(default_factory=dict)
     modalities: dict[str, int] = Field(default_factory=dict)
     locations: dict[str, int] = Field(default_factory=dict)
+    sources: dict[str, int] = Field(default_factory=dict)
     posted_buckets: dict[str, int] = Field(default_factory=dict)
 
 
@@ -168,6 +181,7 @@ class SessionOut(BaseModel):
     session_id: str
     cv_id: str
     cv_filename: str | None = None
+    candidate_name: str | None = None
     active_search_id: str | None = None
     ui_state: dict = Field(default_factory=dict)
     status: str

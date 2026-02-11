@@ -29,6 +29,7 @@ def test_upload_creates_session_and_supports_state_roundtrip(monkeypatch):
         assert current_body["session_id"] == session_id
         assert current_body["cv_id"] == cv_id
         assert current_body["cv_filename"] == "cv.pdf"
+        assert current_body["candidate_name"] == "Data Analyst"
         assert current_body["analysis_executed_at"] is not None
 
         state = client.post(
@@ -138,10 +139,35 @@ def test_upload_deduplicates_by_file_hash_and_keeps_session_history(monkeypatch)
         first_body = first.json()
         second_body = second.json()
         assert first_body["cv_id"] == second_body["cv_id"]
-        assert first_body["session_id"] != second_body["session_id"]
+        assert first_body["session_id"] == second_body["session_id"]
 
         history = client.get("/api/session/history?limit=10")
         assert history.status_code == 200
         items = history.json()["items"]
         matches = [item for item in items if item["cv_id"] == first_body["cv_id"]]
-        assert len(matches) >= 2
+        assert len(matches) == 1
+
+
+def test_delete_session_removes_row_from_history(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.cv_extract._extract_pdf",
+        lambda _: "Jane Doe\nSkills: Python\nEducation: Bachelor",
+    )
+
+    with TestClient(app) as client:
+        uploaded = client.post(
+            "/api/cv/upload",
+            files={"file": ("cv-delete.pdf", BytesIO(b"delete-session"), "application/pdf")},
+        )
+        assert uploaded.status_code == 200
+        session_id = uploaded.json()["session_id"]
+        assert session_id
+
+        deleted = client.delete(f"/api/session/{session_id}")
+        assert deleted.status_code == 200
+        assert deleted.json()["ok"] is True
+
+        history = client.get("/api/session/history?limit=50")
+        assert history.status_code == 200
+        session_ids = [item["session_id"] for item in history.json()["items"]]
+        assert session_id not in session_ids

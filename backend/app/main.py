@@ -24,8 +24,14 @@ async def lifespan(app: FastAPI):
     with SessionLocal() as db:
         state = ensure_scheduler_state(db, interval_minutes=settings.scheduler_interval_minutes)
         # Safety: do not auto-resume background writer on startup from stale persisted state.
+        state_changed = False
         if state.is_running:
             state.is_running = False
+            state_changed = True
+        if state.interval_minutes != settings.scheduler_interval_minutes:
+            state.interval_minutes = settings.scheduler_interval_minutes
+            state_changed = True
+        if state_changed:
             db.add(state)
             try:
                 db.commit()

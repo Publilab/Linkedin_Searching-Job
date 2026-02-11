@@ -4,6 +4,9 @@ from sqlalchemy import Engine
 
 
 _TABLE_COLUMNS: dict[str, list[tuple[str, str]]] = {
+    "search_configs": [
+        ("sources_json", "TEXT NOT NULL DEFAULT '[\"linkedin_public\"]'"),
+    ],
     "candidate_profiles": [
         ("llm_profile_json", "TEXT NOT NULL DEFAULT '{}'"),
         ("llm_strategy_json", "TEXT NOT NULL DEFAULT '{}'"),

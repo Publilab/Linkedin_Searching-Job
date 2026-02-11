@@ -85,6 +85,7 @@ class SearchConfig(Base):
     city: Mapped[str | None] = mapped_column(String(120), nullable=True)
     time_window_hours: Mapped[int] = mapped_column(Integer, nullable=False, default=24)
     keywords_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    sources_json: Mapped[list] = mapped_column(JSON, nullable=False, default=lambda: ["linkedin_public"])
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
@@ -257,7 +258,7 @@ class SchedulerState(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
     is_running: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    interval_minutes: Mapped[int] = mapped_column(Integer, nullable=False, default=30)
+    interval_minutes: Mapped[int] = mapped_column(Integer, nullable=False, default=60)
     last_tick_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow
