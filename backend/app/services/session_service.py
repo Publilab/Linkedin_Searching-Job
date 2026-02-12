@@ -162,6 +162,110 @@ def delete_session_group(db: Session, *, session_id: str) -> bool:
     return True
 
 
+
+def purge_database_except_active_session(
+    db: Session,
+    *,
+    keep_session_id: str | None = None,
+) -> dict[str, int | str | None]:
+    keep_session: models.CVSession | None = None
+    if keep_session_id:
+        keep_session = db.get(models.CVSession, keep_session_id)
+
+    if not keep_session:
+        keep_session = db.scalar(
+            select(models.CVSession)
+            .where(models.CVSession.status == "active")
+            .order_by(desc(models.CVSession.last_seen_at))
+        )
+
+    if not keep_session:
+        keep_session = db.scalar(select(models.CVSession).order_by(desc(models.CVSession.last_seen_at)))
+
+    kept_session_id = keep_session.id if keep_session else None
+    kept_cv_id = keep_session.cv_id if keep_session else None
+    kept_search_id = keep_session.active_search_id if keep_session else None
+
+    if kept_session_id:
+        deleted_sessions = (
+            db.execute(sa_delete(models.CVSession).where(models.CVSession.id != kept_session_id)).rowcount or 0
+        )
+    else:
+        deleted_sessions = db.execute(sa_delete(models.CVSession)).rowcount or 0
+
+    if kept_cv_id:
+        if kept_search_id:
+            deleted_searches_same_cv = (
+                db.execute(
+                    sa_delete(models.SearchConfig).where(
+                        models.SearchConfig.cv_id == kept_cv_id,
+                        models.SearchConfig.id != kept_search_id,
+                    )
+                ).rowcount
+                or 0
+            )
+        else:
+            deleted_searches_same_cv = (
+                db.execute(
+                    sa_delete(models.SearchConfig).where(models.SearchConfig.cv_id == kept_cv_id)
+                ).rowcount
+                or 0
+            )
+
+        deleted_cv_documents = (
+            db.execute(sa_delete(models.CVDocument).where(models.CVDocument.id != kept_cv_id)).rowcount
+            or 0
+        )
+        deleted_insights = (
+            db.execute(sa_delete(models.Insight).where(models.Insight.cv_id != kept_cv_id)).rowcount
+            or 0
+        )
+        deleted_llm_usage_logs = (
+            db.execute(
+                sa_delete(models.LLMUsageLog).where(
+                    (models.LLMUsageLog.cv_id.is_(None))
+                    | (models.LLMUsageLog.cv_id != kept_cv_id)
+                )
+            ).rowcount
+            or 0
+        )
+    else:
+        deleted_searches_same_cv = 0
+        deleted_cv_documents = db.execute(sa_delete(models.CVDocument)).rowcount or 0
+        deleted_insights = db.execute(sa_delete(models.Insight)).rowcount or 0
+        deleted_llm_usage_logs = db.execute(sa_delete(models.LLMUsageLog)).rowcount or 0
+
+    orphan_result_exists = select(models.SearchResult.id).where(
+        models.SearchResult.job_posting_id == models.JobPosting.id
+    )
+    deleted_orphan_jobs = (
+        db.execute(sa_delete(models.JobPosting).where(~orphan_result_exists.exists())).rowcount or 0
+    )
+
+    db.commit()
+
+    if kept_session_id:
+        surviving = db.get(models.CVSession, kept_session_id)
+        if surviving:
+            _deactivate_active_sessions(db, keep_session_id=surviving.id)
+            surviving.status = "active"
+            _touch(surviving)
+            db.add(surviving)
+            db.commit()
+
+    return {
+        "kept_session_id": kept_session_id,
+        "kept_cv_id": kept_cv_id,
+        "kept_search_id": kept_search_id,
+        "deleted_sessions": deleted_sessions,
+        "deleted_cv_documents": deleted_cv_documents,
+        "deleted_searches_same_cv": deleted_searches_same_cv,
+        "deleted_orphan_jobs": deleted_orphan_jobs,
+        "deleted_insights": deleted_insights,
+        "deleted_llm_usage_logs": deleted_llm_usage_logs,
+    }
+
+
 def _deactivate_active_sessions(db: Session, *, keep_session_id: str | None = None) -> None:
     active_sessions = db.scalars(
         select(models.CVSession).where(models.CVSession.status == "active")

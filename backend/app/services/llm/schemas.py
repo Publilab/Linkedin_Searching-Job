@@ -26,3 +26,51 @@ class LLMJobEvaluation(BaseModel):
     fit_reasons: list[str] = Field(default_factory=list)
     gap_notes: list[str] = Field(default_factory=list)
     role_alignment: list[str] = Field(default_factory=list)
+
+
+class LLMRoleProbability(BaseModel):
+    role: str = ""
+    probability: float = 0.0
+    why: list[str] = Field(default_factory=list)
+
+
+class LLMGapItem(BaseModel):
+    gap: str = ""
+    impact: str = "medium"
+    fix: list[str] = Field(default_factory=list)
+
+
+class LLMFitOutlook(BaseModel):
+    target_roles: list[LLMRoleProbability] = Field(default_factory=list)
+    strengths: list[str] = Field(default_factory=list)
+    gaps: list[LLMGapItem] = Field(default_factory=list)
+
+
+class LLMRerankRule(BaseModel):
+    rule: str = ""
+    weight: float = 0.0
+
+
+class LLMSearchImprovements(BaseModel):
+    add_queries: list[str] = Field(default_factory=list)
+    remove_queries: list[str] = Field(default_factory=list)
+    recommended_filters: dict = Field(default_factory=dict)
+    rerank_rules: list[LLMRerankRule] = Field(default_factory=list)
+
+
+class LLMCVRecommendation(BaseModel):
+    change: str = ""
+    reason: str = ""
+    example_text: str | None = None
+
+
+class LLMWeeklyPlanItem(BaseModel):
+    day: str = ""
+    actions: list[str] = Field(default_factory=list)
+
+
+class LLMFeedbackInsights(BaseModel):
+    fit_outlook: LLMFitOutlook = Field(default_factory=LLMFitOutlook)
+    search_improvements: LLMSearchImprovements = Field(default_factory=LLMSearchImprovements)
+    cv_recommendations: list[LLMCVRecommendation] = Field(default_factory=list)
+    weekly_plan: list[LLMWeeklyPlanItem] = Field(default_factory=list)

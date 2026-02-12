@@ -9,7 +9,7 @@ const I18N = {
   es: {
     title: "SeekJob",
     subtitle: "Sube CV, revisa análisis IA y prioriza ofertas por mejor encaje.",
-    tabA: "Buscador LinkedIn desde CV | Segundo plano | Resumen del CV",
+    tabA: "Buscador",
     tabB: "Sesiones previas",
     tabC: "Análisis IA del perfil",
     tabD: "Búsqueda | Resultados",
@@ -36,6 +36,7 @@ const I18N = {
     deleteSelected: "Borrar seleccionadas",
     clearResults: "Limpiar resultados",
     addToSearch: "Agregar",
+    strategyDeleteSelected: "Borrar seleccionadas",
     source: "Fuente",
     page: "Página",
     of: "de",
@@ -51,11 +52,18 @@ const I18N = {
     resume: "Retomar",
     candidateName: "Nombre CV",
     deleteSession: "Borrar",
+    processSession: "Procesar",
+    deleteDatabase: "Borrar BD",
+    insights: "Feedback IA",
+    generateInsights: "Generar feedback",
+    refreshInsights: "Actualizar feedback",
+    insightStatus: "Estado feedback",
+    insightNoData: "Sin feedback generado todavía.",
   },
   en: {
     title: "SeekJob",
     subtitle: "Upload CV, review AI analysis, and prioritize jobs by best fit.",
-    tabA: "LinkedIn CV Finder | Background | CV Summary",
+    tabA: "Buscador",
     tabB: "Previous sessions",
     tabC: "AI profile analysis",
     tabD: "Search | Results",
@@ -82,6 +90,7 @@ const I18N = {
     deleteSelected: "Delete selected",
     clearResults: "Clear results",
     addToSearch: "Add",
+    strategyDeleteSelected: "Delete selected",
     source: "Source",
     page: "Page",
     of: "of",
@@ -97,6 +106,13 @@ const I18N = {
     resume: "Resume",
     candidateName: "CV name",
     deleteSession: "Delete",
+    processSession: "Process",
+    deleteDatabase: "Delete DB",
+    insights: "AI Feedback",
+    generateInsights: "Generate feedback",
+    refreshInsights: "Refresh feedback",
+    insightStatus: "Feedback status",
+    insightNoData: "No feedback generated yet.",
   },
 };
 
@@ -160,6 +176,31 @@ function normalizeQuery(value) {
     .trim();
 }
 
+function normalizeQueryKey(value) {
+  return normalizeQuery(value).toLowerCase();
+}
+
+function normalizeDismissedSuggestionKeys(values) {
+  const seen = new Set();
+  const out = [];
+  for (const value of values || []) {
+    const key = normalizeQueryKey(value);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(key);
+  }
+  return out;
+}
+
+function filterDismissedSuggestions(items, dismissedKeys) {
+  const blocked = new Set(normalizeDismissedSuggestionKeys(dismissedKeys || []));
+  if (blocked.size === 0) return items || [];
+  return (items || []).filter((item) => {
+    const key = normalizeQueryKey(item?.text || item);
+    return key && !blocked.has(key);
+  });
+}
+
 function makeQueryId() {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
     return crypto.randomUUID();
@@ -204,6 +245,7 @@ function mergeSuggestionItems(existing, incoming, options = {}) {
     byKey.set(text.toLowerCase(), {
       id: item?.id || makeQueryId(),
       text,
+      selected: item?.selected !== false,
       source: item?.source || source,
     });
   }
@@ -213,7 +255,12 @@ function mergeSuggestionItems(existing, incoming, options = {}) {
     if (!text) continue;
     const key = text.toLowerCase();
     if (byKey.has(key)) continue;
-    byKey.set(key, { id: value?.id || makeQueryId(), text, source });
+    byKey.set(key, {
+      id: value?.id || makeQueryId(),
+      text,
+      selected: value?.selected !== false,
+      source,
+    });
   }
 
   return Array.from(byKey.values());
@@ -269,6 +316,7 @@ export default function Home() {
   const [cvId, setCvId] = useState("");
   const [sessionId, setSessionId] = useState("");
   const [sessionHistory, setSessionHistory] = useState([]);
+  const [selectedHistorySessionIds, setSelectedHistorySessionIds] = useState([]);
   const [restoringSession, setRestoringSession] = useState(false);
 
   const [summary, setSummary] = useState({
@@ -305,6 +353,7 @@ export default function Home() {
   const [selectedSources, setSelectedSources] = useState(["linkedin_public"]);
   const [queryItems, setQueryItems] = useState([]);
   const [suggestedQueries, setSuggestedQueries] = useState([]);
+  const [dismissedSuggestedQueries, setDismissedSuggestedQueries] = useState([]);
   const [newQuery, setNewQuery] = useState("");
 
   const [sortBy, setSortBy] = useState("newest");
@@ -334,6 +383,7 @@ export default function Home() {
     posted_buckets: {},
   });
   const [scheduler, setScheduler] = useState({ is_running: false, interval_minutes: 60, last_tick_at: null });
+  const [latestInsight, setLatestInsight] = useState(null);
 
   const summaryText = useMemo(
     () => ({
@@ -378,19 +428,27 @@ export default function Home() {
   const loadSessionSnapshot = async (session) => {
     if (!session) return;
 
+    const sessionUiState = session.ui_state || {};
+    const sessionDismissedKeys = normalizeDismissedSuggestionKeys(sessionUiState.dismissed_suggested_queries || []);
+
     setSessionId(session.session_id || "");
     setCvId(session.cv_id || "");
     setSearchId(session.active_search_id || "");
-    applyUiState(session.ui_state || {});
+    setDismissedSuggestedQueries(sessionDismissedKeys);
+    applyUiState(sessionUiState);
 
     if (session.cv_id) {
       const summaryOut = await api(`/cv/${session.cv_id}/summary`);
       setSummary(summaryOut.summary || summary);
       setAnalysis(summaryOut.analysis || analysis);
       setSuggestedQueries((prev) =>
-        mergeSuggestionItems(prev, summaryOut.analysis?.recommended_queries || [], { source: "analysis" }),
+        filterDismissedSuggestions(
+          mergeSuggestionItems(prev, summaryOut.analysis?.recommended_queries || [], { source: "analysis" }),
+          sessionDismissedKeys,
+        ),
       );
-      await refreshStrategy(session.cv_id);
+      await refreshStrategy(session.cv_id, sessionDismissedKeys);
+      await refreshLatestInsight(session.cv_id);
     }
 
     if (session.active_search_id) {
@@ -417,12 +475,15 @@ export default function Home() {
     }
   };
 
-  const refreshStrategy = async (targetCvId = cvId) => {
+  const refreshStrategy = async (targetCvId = cvId, dismissedKeys = dismissedSuggestedQueries) => {
     if (!targetCvId) return;
     const out = await api(`/cv/${targetCvId}/strategy`);
     setStrategy(out);
     setSuggestedQueries((prev) =>
-      mergeSuggestionItems(prev, out.recommended_queries || [], { source: "strategy" }),
+      filterDismissedSuggestions(
+        mergeSuggestionItems(prev, out.recommended_queries || [], { source: "strategy" }),
+        dismissedKeys,
+      ),
     );
   };
 
@@ -459,8 +520,35 @@ export default function Home() {
     setFacets(data);
   };
 
+  const logInteraction = async (payload) => {
+    if (!payload || !payload.cv_id) return;
+    try {
+      await api("/interactions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+    } catch {
+      // non-blocking telemetry
+    }
+  };
+
+  const refreshLatestInsight = async (targetCvId = cvId) => {
+    if (!targetCvId) {
+      setLatestInsight(null);
+      return;
+    }
+    const out = await api(`/insights/cv/${targetCvId}/latest`);
+    setLatestInsight(out || null);
+  };
+
   const applyUiState = (uiState) => {
     if (!uiState || typeof uiState !== "object") return;
+
+    const dismissedKeys = Array.isArray(uiState.dismissed_suggested_queries)
+      ? normalizeDismissedSuggestionKeys(uiState.dismissed_suggested_queries)
+      : dismissedSuggestedQueries;
+
     if (typeof uiState.country === "string") setCountry(uiState.country);
     if (typeof uiState.city === "string") setCity(uiState.city);
     if (uiState.time_window_hours != null) setTimeWindow(String(uiState.time_window_hours));
@@ -473,6 +561,9 @@ export default function Home() {
     if (uiState.page != null) setResultsPage(Math.max(1, Number(uiState.page) || 1));
     if (uiState.page_size != null) setResultsPageSize(String(Number(uiState.page_size) || 50));
     if (typeof uiState.lang === "string" && (uiState.lang === "es" || uiState.lang === "en")) setLang(uiState.lang);
+    if (Array.isArray(uiState.dismissed_suggested_queries)) {
+      setDismissedSuggestedQueries(dismissedKeys);
+    }
     if (Array.isArray(uiState.query_items)) {
       setQueryItems(mergeQueryItems([], uiState.query_items, { enabled: true, source: "session" }));
     }
@@ -480,7 +571,12 @@ export default function Home() {
       setSelectedSources(normalizeSourceSelection(uiState.sources, availableSources));
     }
     if (Array.isArray(uiState.suggested_queries)) {
-      setSuggestedQueries(mergeSuggestionItems([], uiState.suggested_queries, { source: "session" }));
+      setSuggestedQueries(
+        filterDismissedSuggestions(
+          mergeSuggestionItems([], uiState.suggested_queries, { source: "session" }),
+          dismissedKeys,
+        ),
+      );
     }
     if (typeof uiState.search_id === "string") setSearchId(uiState.search_id);
   };
@@ -490,6 +586,13 @@ export default function Home() {
     refreshSessionHistory().catch(() => null);
     refreshSources().catch(() => null);
   }, []);
+
+
+  useEffect(() => {
+    setSelectedHistorySessionIds((prev) =>
+      prev.filter((id) => (sessionHistory || []).some((item) => item.session_id === id)),
+    );
+  }, [sessionHistory]);
 
   useEffect(() => {
     let cancelled = false;
@@ -550,6 +653,7 @@ export default function Home() {
         sources: selectedSources,
         query_items: queryItems,
         suggested_queries: suggestedQueries,
+        dismissed_suggested_queries: dismissedSuggestedQueries,
         sort_by: sortBy,
         source: sourceFilter,
         category: categoryFilter,
@@ -582,6 +686,7 @@ export default function Home() {
     selectedSources,
     queryItems,
     suggestedQueries,
+    dismissedSuggestedQueries,
     sortBy,
     sourceFilter,
     categoryFilter,
@@ -628,11 +733,16 @@ export default function Home() {
       setAnalysis(out.analysis || analysis);
       setSearchId("");
       setQueryItems([]);
+      setDismissedSuggestedQueries([]);
       setSuggestedQueries(
-        mergeSuggestionItems([], out.analysis?.recommended_queries || [], { source: "analysis" }),
+        filterDismissedSuggestions(
+          mergeSuggestionItems([], out.analysis?.recommended_queries || [], { source: "analysis" }),
+          [],
+        ),
       );
 
-      await refreshStrategy(out.cv_id);
+      await refreshStrategy(out.cv_id, []);
+      await refreshLatestInsight(out.cv_id);
       await refreshSessionHistory();
     });
 
@@ -658,9 +768,12 @@ export default function Home() {
       setSummary(out.summary);
       setAnalysis(out.analysis || analysis);
       setSuggestedQueries((prev) =>
-        mergeSuggestionItems(prev, out.analysis?.recommended_queries || [], { source: "analysis" }),
+        filterDismissedSuggestions(
+          mergeSuggestionItems(prev, out.analysis?.recommended_queries || [], { source: "analysis" }),
+          dismissedSuggestedQueries,
+        ),
       );
-      await refreshStrategy(cvId);
+      await refreshStrategy(cvId, dismissedSuggestedQueries);
     });
 
   const reanalyze = () =>
@@ -670,9 +783,24 @@ export default function Home() {
       setSummary(out.summary);
       setAnalysis(out.analysis || analysis);
       setSuggestedQueries((prev) =>
-        mergeSuggestionItems(prev, out.analysis?.recommended_queries || [], { source: "analysis" }),
+        filterDismissedSuggestions(
+          mergeSuggestionItems(prev, out.analysis?.recommended_queries || [], { source: "analysis" }),
+          dismissedSuggestedQueries,
+        ),
       );
-      await refreshStrategy(cvId);
+      await refreshStrategy(cvId, dismissedSuggestedQueries);
+      await refreshLatestInsight(cvId);
+    });
+
+  const generateInsight = () =>
+    run(async () => {
+      if (!cvId) throw new Error("Upload CV first");
+      const out = await api(`/insights/cv/${cvId}/generate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ days: 7 }),
+      });
+      setLatestInsight(out || null);
     });
 
   const createSearch = () =>
@@ -729,12 +857,24 @@ export default function Home() {
       await refreshFacets(searchId);
     });
 
-  const setChecked = (resultId, checked) =>
+  const setChecked = (row, checked) =>
     run(async () => {
-      await api(`/searches/results/${resultId}/check`, {
+      await api(`/searches/results/${row.result_id}/check`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ checked }),
+      });
+      await logInteraction({
+        cv_id: cvId,
+        session_id: sessionId || null,
+        search_id: searchId || null,
+        result_id: row.result_id,
+        job_id: row.job_id,
+        event_type: checked ? "check" : "uncheck",
+        meta: {
+          title: row.title,
+          source: row.source,
+        },
       });
       await refreshResults(searchId);
     });
@@ -752,6 +892,15 @@ export default function Home() {
           }),
         ),
       );
+      await logInteraction({
+        cv_id: cvId,
+        session_id: sessionId || null,
+        search_id: searchId || null,
+        event_type: checked ? "bulk_check" : "bulk_uncheck",
+        meta: {
+          count: results.length,
+        },
+      });
       await refreshResults(searchId);
     });
 
@@ -788,59 +937,136 @@ export default function Home() {
       setScheduler(out);
     });
 
-  const resumeFromHistory = (targetSessionId) =>
+  const resetCurrentSessionState = () => {
+    setSessionId("");
+    setCvId("");
+    setSearchId("");
+    setResults([]);
+    setStrategy({
+      role_focus: [],
+      recommended_queries: [],
+      market_roles: [],
+    });
+    setQueryItems([]);
+    setSuggestedQueries([]);
+    setDismissedSuggestedQueries([]);
+    setSummary({
+      highlights: [],
+      skills: [],
+      experience: [],
+      education: [],
+      languages: [],
+    });
+    setAnalysis({
+      target_roles: [],
+      secondary_roles: [],
+      seniority: "unknown",
+      industries: [],
+      strengths: [],
+      skill_gaps: [],
+      recommended_queries: [],
+      llm_status: "fallback",
+      llm_error: null,
+    });
+    setSelectedHistorySessionIds([]);
+    setLatestInsight(null);
+    try {
+      localStorage.removeItem(SESSION_STORAGE_KEY);
+    } catch {
+      // noop
+    }
+  };
+
+  const toggleHistorySelection = (targetSessionId, enabled) => {
+    const cleanId = String(targetSessionId || "").trim();
+    if (!cleanId) return;
+    setSelectedHistorySessionIds((prev) => {
+      const has = prev.includes(cleanId);
+      if (enabled && !has) return [...prev, cleanId];
+      if (!enabled && has) return prev.filter((item) => item !== cleanId);
+      return prev;
+    });
+  };
+
+  const resumeSessionById = async (targetSessionId) => {
+    if (!targetSessionId) return;
+    const resumed = await api("/session/resume", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_id: targetSessionId }),
+    });
+    await loadSessionSnapshot(resumed);
+    await refreshSessionHistory();
+  };
+
+  const deleteSessionById = async (targetSessionId, options = {}) => {
+    const refresh = options.refresh ?? true;
+    if (!targetSessionId) return;
+    await api(`/session/${targetSessionId}`, { method: "DELETE" });
+    if (targetSessionId === sessionId) {
+      resetCurrentSessionState();
+    }
+    if (refresh) {
+      await refreshSessionHistory();
+    }
+  };
+
+  const processSelectedHistory = () =>
     run(async () => {
-      if (!targetSessionId) return;
-      const resumed = await api("/session/resume", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ session_id: targetSessionId }),
-      });
-      await loadSessionSnapshot(resumed);
+      const selected = [...selectedHistorySessionIds];
+      if (selected.length === 0) {
+        throw new Error("Selecciona una sesión para procesar");
+      }
+      if (selected.length > 1) {
+        throw new Error("Selecciona solo una sesión para procesar");
+      }
+      await resumeSessionById(selected[0]);
+    });
+
+  const deleteSelectedHistory = () =>
+    run(async () => {
+      const selected = [...new Set(selectedHistorySessionIds)];
+      if (selected.length === 0) {
+        throw new Error("Selecciona al menos una sesión para borrar");
+      }
+
+      for (const targetSessionId of selected) {
+        await deleteSessionById(targetSessionId, { refresh: false });
+      }
+      setSelectedHistorySessionIds([]);
       await refreshSessionHistory();
     });
 
-  const deleteFromHistory = (targetSessionId) =>
+  const purgeDatabaseKeepingCurrent = () =>
     run(async () => {
-      if (!targetSessionId) return;
-      await api(`/session/${targetSessionId}`, { method: "DELETE" });
-      if (targetSessionId === sessionId) {
-        setSessionId("");
-        setCvId("");
-        setSearchId("");
-        setResults([]);
-        setStrategy({
-          role_focus: [],
-          recommended_queries: [],
-          market_roles: [],
-        });
-        setQueryItems([]);
-        setSuggestedQueries([]);
-        setSummary({
-          highlights: [],
-          skills: [],
-          experience: [],
-          education: [],
-          languages: [],
-        });
-        setAnalysis({
-          target_roles: [],
-          secondary_roles: [],
-          seniority: "unknown",
-          industries: [],
-          strengths: [],
-          skill_gaps: [],
-          recommended_queries: [],
-          llm_status: "fallback",
-          llm_error: null,
-        });
-        try {
-          localStorage.removeItem(SESSION_STORAGE_KEY);
-        } catch {
-          // noop
-        }
-      }
+      const out = await api("/session/purge-db", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ keep_session_id: sessionId || null }),
+      });
+
+      setSelectedHistorySessionIds([]);
       await refreshSessionHistory();
+
+      if (!out?.kept_session_id) {
+        resetCurrentSessionState();
+        return;
+      }
+
+      if (out.kept_session_id !== sessionId) {
+        const currentOut = await api(`/session/current?session_id=${encodeURIComponent(out.kept_session_id)}`);
+        if (currentOut?.session) {
+          await loadSessionSnapshot(currentOut.session);
+        } else {
+          resetCurrentSessionState();
+        }
+        return;
+      }
+
+      if (searchId) {
+        await refreshResults(searchId);
+        await refreshFacets(searchId);
+      }
     });
 
   const toggleSearchSource = (sourceId, enabled) => {
@@ -867,26 +1093,48 @@ export default function Home() {
     setSelectedSources([]);
   };
 
-  const addRecommendedQuery = (query) => {
-    const normalized = normalizeQuery(query);
-    if (!normalized) return;
-    setQueryItems((prev) => {
-      const key = normalized.toLowerCase();
-      const next = [...prev];
-      const idx = next.findIndex((item) => normalizeQuery(item.text).toLowerCase() === key);
-      if (idx >= 0) {
-        next[idx] = { ...next[idx], enabled: true };
-        return next;
-      }
-      return mergeQueryItems(next, [normalized], { enabled: true, source: "recommended" });
-    });
-  };
-
   const updateSuggestedQuery = (index, value) => {
     const next = [...suggestedQueries];
     if (!next[index]) return;
     next[index] = { ...next[index], text: value };
     setSuggestedQueries(next);
+  };
+
+  const toggleSuggestedQuery = (index, selected) => {
+    const next = [...suggestedQueries];
+    if (!next[index]) return;
+    next[index] = { ...next[index], selected };
+    setSuggestedQueries(next);
+  };
+
+  const addSelectedSuggestedQueries = () => {
+    const selected = (suggestedQueries || [])
+      .filter((item) => item?.selected !== false)
+      .map((item) => normalizeQuery(item?.text))
+      .filter(Boolean);
+    if (selected.length === 0) return;
+
+    setQueryItems((prev) => mergeQueryItems(prev, selected, { enabled: true, source: "recommended" }));
+  };
+
+  const removeSelectedSuggestedQueries = () => {
+    if (suggestedQueries.length === 0) return;
+
+    const selectedKeys = normalizeDismissedSuggestionKeys(
+      suggestedQueries
+        .filter((item) => item?.selected !== false)
+        .map((item) => item?.text),
+    );
+    if (selectedKeys.length === 0) return;
+
+    setDismissedSuggestedQueries((prev) => normalizeDismissedSuggestionKeys([...prev, ...selectedKeys]));
+    setSuggestedQueries((prev) =>
+      prev.filter((item) => {
+        if (item?.selected === false) return true;
+        const key = normalizeQueryKey(item?.text);
+        return !selectedKeys.includes(key);
+      }),
+    );
   };
 
   const addManualQuery = () => {
@@ -1007,6 +1255,32 @@ export default function Home() {
 
       {activeTab === "b" ? <section className="card" style={{ marginTop: 14 }}>
         <h2>{t.sessionHistory}</h2>
+        <div className="toolbar" style={{ marginBottom: 10 }}>
+          <button
+            type="button"
+            className="secondary"
+            disabled={busy || selectedHistorySessionIds.length === 0 || selectedHistorySessionIds.length > 1}
+            onClick={processSelectedHistory}
+          >
+            {t.processSession}
+          </button>
+          <button
+            type="button"
+            className="secondary"
+            disabled={busy || selectedHistorySessionIds.length === 0}
+            onClick={deleteSelectedHistory}
+          >
+            {t.deleteSession}
+          </button>
+          <button
+            type="button"
+            className="secondary"
+            disabled={busy || !sessionId}
+            onClick={purgeDatabaseKeepingCurrent}
+          >
+            {t.deleteDatabase}
+          </button>
+        </div>
         <div style={{ display: "grid", gap: 8 }}>
           {sessionHistory.length === 0 ? (
             <p className="small">No sessions yet.</p>
@@ -1016,11 +1290,17 @@ export default function Home() {
                 key={item.session_id}
                 className="row"
                 style={{
-                  gridTemplateColumns: "1fr 1fr 1fr 1fr auto",
+                  gridTemplateColumns: "auto 1fr 1fr 1fr 1fr",
                   gap: 8,
                   alignItems: "center",
                 }}
               >
+                <input
+                  type="checkbox"
+                  checked={selectedHistorySessionIds.includes(item.session_id)}
+                  disabled={busy || !item.session_id}
+                  onChange={(e) => toggleHistorySelection(item.session_id, e.target.checked)}
+                />
                 <div className="small">
                   <strong>{t.candidateName}:</strong> {item.candidate_name || "-"}
                 </div>
@@ -1035,31 +1315,13 @@ export default function Home() {
                   <br />
                   <strong>{t.status}:</strong> {item.status || "-"}
                 </div>
-                <div className="toolbar" style={{ marginTop: 0 }}>
-                  <button
-                    type="button"
-                    className="secondary"
-                    disabled={busy || !item.session_id || item.session_id === sessionId}
-                    onClick={() => resumeFromHistory(item.session_id)}
-                  >
-                    {t.resume}
-                  </button>
-                  <button
-                    type="button"
-                    className="secondary"
-                    disabled={busy || !item.session_id}
-                    onClick={() => deleteFromHistory(item.session_id)}
-                  >
-                    {t.deleteSession}
-                  </button>
-                </div>
               </div>
             ))
           )}
         </div>
       </section> : null}
 
-      {activeTab === "c" ? <section className="card" style={{ marginTop: 14 }}>
+      {activeTab === "c" ? <section className="card compact-controls" style={{ marginTop: 14 }}>
         <h2>{t.analysis}</h2>
         <p className="small">LLM status: <strong>{analysis.llm_status || "fallback"}</strong></p>
         {analysis.llm_error ? <p className="small"><strong>LLM error:</strong> {analysis.llm_error}</p> : null}
@@ -1091,19 +1353,17 @@ export default function Home() {
               <p className="small">No suggestions yet.</p>
             ) : (
               suggestedQueries.map((item, idx) => (
-                <div key={item.id || `${item.text}-${idx}`} className="row" style={{ gridTemplateColumns: "1fr auto", gap: 8 }}>
+                <div key={item.id || `${item.text}-${idx}`} className="row" style={{ gridTemplateColumns: "auto 1fr", gap: 8 }}>
+                  <input
+                    type="checkbox"
+                    checked={item.selected !== false}
+                    onChange={(e) => toggleSuggestedQuery(idx, e.target.checked)}
+                  />
                   <input
                     value={item.text}
                     onChange={(e) => updateSuggestedQuery(idx, e.target.value)}
                     placeholder="AI suggestion"
                   />
-                  <button
-                    className="secondary"
-                    type="button"
-                    onClick={() => addRecommendedQuery(item.text)}
-                  >
-                    + {t.addToSearch}
-                  </button>
                 </div>
               ))
             )}
@@ -1113,7 +1373,51 @@ export default function Home() {
         <div className="toolbar" style={{ marginTop: 10 }}>
           <button className="ai-reanalyze" onClick={reanalyze} disabled={busy || !cvId}>{t.reanalyze}</button>
           <button className="ai-strategy" onClick={() => run(() => refreshStrategy(cvId))} disabled={busy || !cvId}>{t.loadStrategy}</button>
+          <button
+            className="secondary"
+            type="button"
+            disabled={suggestedQueries.length === 0 || suggestedQueries.every((item) => item?.selected === false)}
+            onClick={removeSelectedSuggestedQueries}
+          >
+            {t.strategyDeleteSelected}
+          </button>
+          <button
+            className="secondary"
+            type="button"
+            disabled={suggestedQueries.length === 0 || suggestedQueries.every((item) => item?.selected === false)}
+            onClick={addSelectedSuggestedQueries}
+          >
+            {t.addToSearch}
+          </button>
         </div>
+
+        <h3 style={{ marginTop: 16 }}>{t.insights}</h3>
+        <div className="toolbar" style={{ marginTop: 6 }}>
+          <button className="ai-strategy" onClick={generateInsight} disabled={busy || !cvId}>{t.generateInsights}</button>
+          <button className="secondary" onClick={() => run(() => refreshLatestInsight(cvId))} disabled={busy || !cvId}>{t.refreshInsights}</button>
+        </div>
+        {!latestInsight ? (
+          <p className="small" style={{ marginTop: 8 }}>{t.insightNoData}</p>
+        ) : (
+          <div style={{ marginTop: 8, display: "grid", gap: 8 }}>
+            <p className="small">
+              <strong>{t.insightStatus}:</strong> {latestInsight?.insights?.llm_status || "fallback"}
+              {latestInsight?.created_at ? ` | ${formatDateTime(latestInsight.created_at)}` : ""}
+            </p>
+            {latestInsight?.insights?.llm_error ? (
+              <p className="small"><strong>LLM error:</strong> {latestInsight.insights.llm_error}</p>
+            ) : null}
+            <p className="small">
+              <strong>Queries +:</strong> {(latestInsight?.insights?.search_improvements?.add_queries || []).slice(0, 8).join(" | ") || "-"}
+            </p>
+            <p className="small">
+              <strong>Queries -:</strong> {(latestInsight?.insights?.search_improvements?.remove_queries || []).slice(0, 8).join(" | ") || "-"}
+            </p>
+            <p className="small">
+              <strong>CV tips:</strong> {(latestInsight?.insights?.cv_recommendations || []).slice(0, 2).map((item) => item.change).join(" | ") || "-"}
+            </p>
+          </div>
+        )}
       </section> : null}
 
       {activeTab === "a" ? <section className="card" style={{ marginTop: 14 }}>
@@ -1161,7 +1465,7 @@ export default function Home() {
         </div>
       </section> : null}
 
-      {activeTab === "d" ? <section className="card" style={{ marginTop: 14 }}>
+      {activeTab === "d" ? <section className="card compact-controls" style={{ marginTop: 14 }}>
         <h2>{t.search}</h2>
         <div className="row">
           <label>
@@ -1486,7 +1790,7 @@ export default function Home() {
                       <input
                         type="checkbox"
                         checked={row.checked}
-                        onChange={(e) => setChecked(row.result_id, e.target.checked)}
+                        onChange={(e) => setChecked(row, e.target.checked)}
                       />
                     </td>
                     <td>
@@ -1507,7 +1811,27 @@ export default function Home() {
                     <td><strong>{row.final_score?.toFixed?.(2) ?? row.final_score}</strong></td>
                     <td className="small">{(row.fit_reasons || []).slice(0, 2).join(" | ") || "-"}</td>
                     <td>
-                      <a className="job-link" href={row.job_url} target="_blank" rel="noreferrer">
+                      <a
+                        className="job-link"
+                        href={row.job_url}
+                        target="_blank"
+                        rel="noreferrer"
+                        onClick={() =>
+                          logInteraction({
+                            cv_id: cvId,
+                            session_id: sessionId || null,
+                            search_id: searchId || null,
+                            result_id: row.result_id,
+                            job_id: row.job_id,
+                            event_type: "open",
+                            meta: {
+                              title: row.title,
+                              source: row.source,
+                              url: row.job_url,
+                            },
+                          })
+                        }
+                      >
                         Open
                       </a>
                     </td>

@@ -171,3 +171,92 @@ def test_delete_session_removes_row_from_history(monkeypatch):
         assert history.status_code == 200
         session_ids = [item["session_id"] for item in history.json()["items"]]
         assert session_id not in session_ids
+
+
+def test_purge_db_keeps_current_session_and_active_search(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.cv_extract._extract_pdf",
+        lambda _: "Test User\nSkills: Python, SQL\nEducation: Bachelor",
+    )
+    monkeypatch.setattr("app.services.search_service.scrape_jobs", lambda **kwargs: [])
+
+    with TestClient(app) as client:
+        first_upload = client.post(
+            "/api/cv/upload",
+            files={"file": ("cv-a.pdf", BytesIO(b"purge-a"), "application/pdf")},
+        )
+        second_upload = client.post(
+            "/api/cv/upload",
+            files={"file": ("cv-b.pdf", BytesIO(b"purge-b"), "application/pdf")},
+        )
+        assert first_upload.status_code == 200
+        assert second_upload.status_code == 200
+
+        first_session_id = first_upload.json()["session_id"]
+        first_cv_id = first_upload.json()["cv_id"]
+        second_session_id = second_upload.json()["session_id"]
+        second_cv_id = second_upload.json()["cv_id"]
+
+        first_search = client.post(
+            "/api/searches",
+            json={
+                "cv_id": first_cv_id,
+                "country": "Chile",
+                "city": "Santiago",
+                "time_window_hours": 24,
+                "keywords": ["data analyst"],
+            },
+        )
+        second_search = client.post(
+            "/api/searches",
+            json={
+                "cv_id": second_cv_id,
+                "country": "Chile",
+                "city": "Santiago",
+                "time_window_hours": 24,
+                "keywords": ["public policy"],
+            },
+        )
+        assert first_search.status_code == 200
+        assert second_search.status_code == 200
+
+        first_search_id = first_search.json()["search_id"]
+        second_search_id = second_search.json()["search_id"]
+
+        resumed_second = client.post(
+            "/api/session/resume",
+            json={"session_id": second_session_id, "active_search_id": second_search_id},
+        )
+        assert resumed_second.status_code == 200
+
+        purge = client.post(
+            "/api/session/purge-db",
+            json={"keep_session_id": second_session_id},
+        )
+        assert purge.status_code == 200
+        purge_body = purge.json()
+        assert purge_body["ok"] is True
+        assert purge_body["kept_session_id"] == second_session_id
+        assert purge_body["kept_cv_id"] == second_cv_id
+        assert purge_body["kept_search_id"] == second_search_id
+
+        history = client.get("/api/session/history?limit=50")
+        assert history.status_code == 200
+        history_items = history.json()["items"]
+        assert len(history_items) == 1
+        assert history_items[0]["session_id"] == second_session_id
+
+        current = client.get("/api/session/current")
+        assert current.status_code == 200
+        assert current.json()["session"]["session_id"] == second_session_id
+
+        kept_search = client.get(f"/api/searches/{second_search_id}")
+        assert kept_search.status_code == 200
+
+        removed_search = client.get(f"/api/searches/{first_search_id}")
+        assert removed_search.status_code == 404
+
+        removed_session = client.get(f"/api/session/current?session_id={first_session_id}")
+        assert removed_session.status_code == 200
+        removed_body = removed_session.json()["session"]
+        assert removed_body is None or removed_body["session_id"] != first_session_id

@@ -7,7 +7,7 @@ from sqlalchemy.exc import OperationalError
 from app.config import settings
 from app.db import SessionLocal, engine, init_db
 from app.db_migrations import run_db_migrations
-from app.routers import cv, health, scheduler, searches, sessions
+from app.routers import cv, health, insights, interactions, scheduler, searches, sessions
 from app.services.scheduler_service import SearchScheduler
 from app.services.search_service import ensure_scheduler_state
 
@@ -59,5 +59,7 @@ app.add_middleware(
 app.include_router(health.router, prefix="/api")
 app.include_router(cv.router, prefix="/api")
 app.include_router(searches.router, prefix="/api")
+app.include_router(interactions.router, prefix="/api")
+app.include_router(insights.router, prefix="/api")
 app.include_router(scheduler.router, prefix="/api")
 app.include_router(sessions.router, prefix="/api")

@@ -53,6 +53,7 @@ h3 {
   background: #eef3f8;
   color: var(--text);
   border: 1px solid var(--border);
+  font-size: 12px;
 }
 
 .tab-button.active {
@@ -106,6 +107,7 @@ button {
   background: var(--accent);
   color: #fff;
   cursor: pointer;
+  font-size: 13px;
 }
 
 button.secondary {
@@ -204,4 +206,16 @@ a.job-link {
 
 .success {
   color: var(--success);
+}
+
+.compact-controls button {
+  font-size: 11px;
+  padding: 5px 9px;
+  border-radius: 8px;
+}
+
+.compact-controls input:not([type="checkbox"]),
+.compact-controls textarea,
+.compact-controls select {
+  font-size: 13px;
 }

@@ -212,3 +212,68 @@ class SessionStateUpdateIn(BaseModel):
 
 class SessionCloseIn(BaseModel):
     session_id: str
+
+
+class SessionPurgeDBIn(BaseModel):
+    keep_session_id: str | None = None
+
+
+class SessionPurgeDBOut(BaseModel):
+    ok: bool = True
+    kept_session_id: str | None = None
+    kept_cv_id: str | None = None
+    kept_search_id: str | None = None
+    deleted_sessions: int = 0
+    deleted_cv_documents: int = 0
+    deleted_searches_same_cv: int = 0
+    deleted_orphan_jobs: int = 0
+    deleted_insights: int = 0
+    deleted_llm_usage_logs: int = 0
+
+
+class InteractionCreateIn(BaseModel):
+    cv_id: str | None = None
+    session_id: str | None = None
+    search_id: str | None = None
+    result_id: str | None = None
+    job_id: str | None = None
+    event_type: Literal["open", "save", "apply", "dismiss", "check", "uncheck", "bulk_check", "bulk_uncheck"]
+    dwell_ms: int | None = Field(default=None, ge=0)
+    meta: dict = Field(default_factory=dict)
+
+
+class InteractionOut(BaseModel):
+    interaction_id: str
+    cv_id: str
+    session_id: str | None = None
+    search_id: str | None = None
+    job_id: str | None = None
+    event_type: str
+    dwell_ms: int | None = None
+    ts: datetime
+    meta: dict = Field(default_factory=dict)
+
+
+class InsightPayloadOut(BaseModel):
+    fit_outlook: dict = Field(default_factory=dict)
+    search_improvements: dict = Field(default_factory=dict)
+    cv_recommendations: list[dict] = Field(default_factory=list)
+    weekly_plan: list[dict] = Field(default_factory=list)
+    llm_status: str = "fallback"
+    llm_error: str | None = None
+
+
+class InsightGenerateIn(BaseModel):
+    days: int = Field(default=7, ge=1, le=90)
+
+
+class InsightOut(BaseModel):
+    insight_id: str
+    cv_id: str
+    period_start: datetime
+    period_end: datetime
+    created_at: datetime
+    model_name: str | None = None
+    token_in: int = 0
+    token_out: int = 0
+    insights: InsightPayloadOut

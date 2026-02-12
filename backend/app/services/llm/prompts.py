@@ -82,3 +82,40 @@ def build_repair_prompt(raw_output: str) -> str:
         "input": raw_output,
     }
     return json.dumps(payload, ensure_ascii=True)
+
+
+
+def build_feedback_insights_prompt(*, prompt_version: str, digest: dict) -> str:
+    payload = {
+        "prompt_version": prompt_version,
+        "task": "Analyze job-search feedback loop and return actionable recommendations",
+        "requirements": [
+            "Return strict JSON only.",
+            "Use compact, actionable bullets.",
+            "Do not hallucinate unavailable information.",
+            "Prioritize recommendations that improve query quality, ranking quality, and CV positioning.",
+            "Use profile, interactions, and job outcomes together.",
+        ],
+        "json_schema": {
+            "fit_outlook": {
+                "target_roles": [{"role": "string", "probability": "number", "why": ["string"]}],
+                "strengths": ["string"],
+                "gaps": [{"gap": "string", "impact": "high|medium|low", "fix": ["string"]}],
+            },
+            "search_improvements": {
+                "add_queries": ["string"],
+                "remove_queries": ["string"],
+                "recommended_filters": {
+                    "date_posted": "1h|3h|8h|24h|72h|168h|720h",
+                    "location": ["string"],
+                    "modalities": ["remote|hybrid|onsite"],
+                    "source_bias": ["string"],
+                },
+                "rerank_rules": [{"rule": "string", "weight": "number"}],
+            },
+            "cv_recommendations": [{"change": "string", "reason": "string", "example_text": "string|null"}],
+            "weekly_plan": [{"day": "Mon|Tue|Wed|Thu|Fri|Sat|Sun", "actions": ["string"]}],
+        },
+        "digest": digest,
+    }
+    return json.dumps(payload, ensure_ascii=True)

@@ -63,6 +63,7 @@ class CandidateProfile(Base):
     llm_prompt_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
     llm_status: Mapped[str] = mapped_column(String(32), nullable=False, default="fallback")
     llm_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    learned_preferences_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
 
     confirmed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)

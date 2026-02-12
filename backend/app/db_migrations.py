@@ -15,6 +15,7 @@ _TABLE_COLUMNS: dict[str, list[tuple[str, str]]] = {
         ("llm_prompt_version", "TEXT NULL"),
         ("llm_status", "TEXT NOT NULL DEFAULT 'fallback'"),
         ("llm_error", "TEXT NULL"),
+        ("learned_preferences_json", "TEXT NOT NULL DEFAULT '{}'"),
     ],
     "job_postings": [
         ("job_category", "TEXT NULL"),

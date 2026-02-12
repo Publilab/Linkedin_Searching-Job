@@ -10,6 +10,8 @@ from app.schemas import (
     SessionCurrentOut,
     SessionHistoryOut,
     SessionOut,
+    SessionPurgeDBIn,
+    SessionPurgeDBOut,
     SessionResumeIn,
     SessionStateUpdateIn,
 )
@@ -18,6 +20,7 @@ from app.services.session_service import (
     delete_session_group,
     get_current_session,
     list_sessions,
+    purge_database_except_active_session,
     resume_session,
     update_session_state,
 )
@@ -95,6 +98,12 @@ def delete_session(session_id: str, db: Session = Depends(get_db)) -> dict:
     if not deleted:
         raise HTTPException(status_code=404, detail="Session not found")
     return {"ok": True}
+
+
+@router.post("/purge-db", response_model=SessionPurgeDBOut)
+def purge_db(payload: SessionPurgeDBIn, db: Session = Depends(get_db)) -> SessionPurgeDBOut:
+    stats = purge_database_except_active_session(db, keep_session_id=payload.keep_session_id)
+    return SessionPurgeDBOut(ok=True, **stats)
 
 
 def _validate_search_for_session(db: Session, cv_id: str, active_search_id: str | None) -> None:

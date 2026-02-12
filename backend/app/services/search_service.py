@@ -11,6 +11,7 @@ from app.config import settings
 from app.services.job_ai_service import compute_job_content_hash, evaluate_job_fit
 from app.services.job_sources import fetch_jobs, normalize_sources
 from app.services.linkedin_scraper import scrape_jobs as scrape_linkedin_jobs
+from app.services.learning_service import personalization_score_for_job, preferred_query_seeds
 from app.services.matcher import compute_match
 
 # Backward-compatible alias used by tests that monkeypatch this symbol.
@@ -55,6 +56,7 @@ def run_search_once(session_factory: sessionmaker, search_id: str, run_type: str
 
         profile_summary = _profile_summary(profile)
         profile_analysis = _profile_analysis(profile)
+        learned_preferences = profile.learned_preferences_json or {}
 
         run = models.SchedulerRun(
             search_config_id=search.id,
@@ -89,7 +91,12 @@ def run_search_once(session_factory: sessionmaker, search_id: str, run_type: str
         location_parts = [p for p in [search_city, search_country] if p]
         location = ", ".join(location_parts) if location_parts else ""
 
-        queries = _build_queries(profile_summary, profile.llm_strategy_json or {}, search.keywords_json or [])
+        queries = _build_queries(
+            profile_summary,
+            profile.llm_strategy_json or {},
+            search.keywords_json or [],
+            learned_preferences=learned_preferences,
+        )
         scraped_jobs: dict[str, dict] = {}
         for query in queries:
             for source_id in search_sources:
@@ -221,17 +228,23 @@ def run_search_once(session_factory: sessionmaker, search_id: str, run_type: str
 
             recency_score = _recency_score(posting.posted_at)
             location_score = _location_score(posting.location, posting.modality, search_city, search_country)
+            personalization_score = personalization_score_for_job(posting, learned_preferences)
             final_score = _final_score(
                 deterministic_score=score,
                 llm_score=llm_fit_score,
                 recency_score=recency_score,
                 location_score=location_score,
+                personalization_score=personalization_score,
                 llm_status=str(ai.get("llm_status") or "fallback"),
             )
+            breakdown_with_learning = {
+                **(breakdown or {}),
+                "personalization": personalization_score,
+            }
 
             if result:
                 result.match_percent = score
-                result.match_breakdown_json = breakdown
+                result.match_breakdown_json = breakdown_with_learning
                 result.llm_fit_score = llm_fit_score
                 result.final_score = final_score
                 result.fit_reasons_json = ai.get("fit_reasons") or []
@@ -246,7 +259,7 @@ def run_search_once(session_factory: sessionmaker, search_id: str, run_type: str
                     search_config_id=search_id_local,
                     job_posting_id=posting_id,
                     match_percent=score,
-                    match_breakdown_json=breakdown,
+                    match_breakdown_json=breakdown_with_learning,
                     llm_fit_score=llm_fit_score,
                     final_score=final_score,
                     fit_reasons_json=ai.get("fit_reasons") or [],
@@ -336,7 +349,13 @@ def _profile_analysis(profile: models.CandidateProfile) -> dict:
     }
 
 
-def _build_queries(profile_summary: dict, llm_strategy: dict, extra_keywords: list[str]) -> list[str]:
+def _build_queries(
+    profile_summary: dict,
+    llm_strategy: dict,
+    extra_keywords: list[str],
+    *,
+    learned_preferences: dict | None = None,
+) -> list[str]:
     strategy_queries = llm_strategy.get("recommended_queries", []) if isinstance(llm_strategy, dict) else []
     experience = profile_summary.get("experience", []) or []
     skills = profile_summary.get("skills", []) or []
@@ -344,10 +363,14 @@ def _build_queries(profile_summary: dict, llm_strategy: dict, extra_keywords: li
 
     role_phrases = _extract_role_phrases(experience + education)
     education_focus = _extract_education_focus(education)
+    learned_queries = preferred_query_seeds(learned_preferences, limit=8)
 
     seeds: list[str] = []
     # Highest priority: explicit strategy from profile analysis.
     seeds.extend([s for s in strategy_queries[:12] if isinstance(s, str)])
+
+    # Learned preferences from interaction history.
+    seeds.extend([s for s in learned_queries if isinstance(s, str)])
 
     # Then professional trajectory and academic formation.
     seeds.extend(role_phrases[:10])
@@ -695,12 +718,24 @@ def _final_score(
     llm_score: float,
     recency_score: float,
     location_score: float,
+    personalization_score: float,
     llm_status: str,
 ) -> float:
     if llm_status == "ok":
-        value = (0.55 * llm_score) + (0.25 * deterministic_score) + (0.10 * recency_score) + (0.10 * location_score)
+        value = (
+            (0.50 * llm_score)
+            + (0.20 * deterministic_score)
+            + (0.10 * recency_score)
+            + (0.10 * location_score)
+            + (0.10 * personalization_score)
+        )
     else:
-        value = (0.75 * deterministic_score) + (0.15 * recency_score) + (0.10 * location_score)
+        value = (
+            (0.65 * deterministic_score)
+            + (0.15 * recency_score)
+            + (0.10 * location_score)
+            + (0.10 * personalization_score)
+        )
     return round(value, 2)
 
 
