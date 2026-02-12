@@ -5,11 +5,11 @@ import json
 import re
 from typing import Any
 
-from app.config import settings
 from app.services.llm import LLMClientError, get_llm_client
 from app.services.llm.pii import redact_pii
 from app.services.llm.prompts import build_profile_prompt
 from app.services.llm.schemas import LLMCVExtraction
+from app.services.runtime_settings import load_runtime_llm_config
 
 
 def analyze_profile(raw_text: str, summary: dict[str, Any]) -> dict[str, Any]:
@@ -17,16 +17,18 @@ def analyze_profile(raw_text: str, summary: dict[str, Any]) -> dict[str, Any]:
     redacted_text = redact_pii(raw_text)
     fingerprint = _profile_fingerprint(normalized_summary)
 
+    runtime_cfg = load_runtime_llm_config()
     client = get_llm_client()
     if not client.enabled:
         return _fallback_bundle(
             normalized_summary,
             fingerprint=fingerprint,
-            error=f"LLM disabled or missing {settings.llm_provider} configuration",
+            error=f"LLM disabled or missing {runtime_cfg.provider} configuration",
+            prompt_version=runtime_cfg.prompt_version,
         )
 
     prompt = build_profile_prompt(
-        prompt_version=settings.llm_prompt_version,
+        prompt_version=runtime_cfg.prompt_version,
         cv_text=redacted_text,
         current_summary=normalized_summary,
     )
@@ -78,16 +80,22 @@ def analyze_profile(raw_text: str, summary: dict[str, Any]) -> dict[str, Any]:
             "llm_profile_json": llm_profile_json,
             "llm_strategy_json": strategy,
             "profile_fingerprint": fingerprint,
-            "llm_model": settings.llm_model,
-            "llm_prompt_version": settings.llm_prompt_version,
+            "llm_model": runtime_cfg.model,
+            "llm_prompt_version": runtime_cfg.prompt_version,
             "llm_status": "ok",
             "llm_error": None,
         }
     except (LLMClientError, ValueError) as exc:
-        return _fallback_bundle(normalized_summary, fingerprint=fingerprint, error=str(exc))
+        return _fallback_bundle(normalized_summary, fingerprint=fingerprint, error=str(exc), prompt_version=runtime_cfg.prompt_version)
 
 
-def _fallback_bundle(summary: dict[str, Any], *, fingerprint: str, error: str) -> dict[str, Any]:
+def _fallback_bundle(
+    summary: dict[str, Any],
+    *,
+    fingerprint: str,
+    error: str,
+    prompt_version: str,
+) -> dict[str, Any]:
     target_roles = _infer_roles(summary)
     strategy = {"recommended_queries": _fallback_queries(summary)}
 
@@ -123,7 +131,7 @@ def _fallback_bundle(summary: dict[str, Any], *, fingerprint: str, error: str) -
         "llm_strategy_json": strategy,
         "profile_fingerprint": fingerprint,
         "llm_model": None,
-        "llm_prompt_version": settings.llm_prompt_version,
+        "llm_prompt_version": prompt_version,
         "llm_status": "fallback",
         "llm_error": error,
     }

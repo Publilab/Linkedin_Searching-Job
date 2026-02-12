@@ -1,1 +1,1 @@
-self.__REACT_LOADABLE_MANIFEST="{}"
+self.__REACT_LOADABLE_MANIFEST='{"app/lib/desktopBridge.js -> @tauri-apps/api/core":{"id":8267,"files":["static/chunks/267.79826717b0a99f08.js"]}}';

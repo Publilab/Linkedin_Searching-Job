@@ -8,12 +8,12 @@ from sqlalchemy import and_, desc, select
 from sqlalchemy.orm import Session
 
 from app import models
-from app.config import settings
 from app.services.learning_service import summarize_preference_strengths
 from app.services.llm import LLMClientError, get_llm_client
 from app.services.llm.prompts import build_feedback_insights_prompt
 from app.services.llm.schemas import LLMFeedbackInsights
 from app.services.market_demand_service import build_search_strategy
+from app.services.runtime_settings import load_runtime_llm_config
 
 
 EVENT_IMPORTANCE = {
@@ -40,9 +40,10 @@ def generate_feedback_insight(db: Session, *, cv_id: str, days: int = 7) -> mode
     token_in = 0
     token_out = 0
 
+    runtime_cfg = load_runtime_llm_config(db)
     client = get_llm_client()
     if client.enabled:
-        prompt = build_feedback_insights_prompt(prompt_version=settings.llm_prompt_version, digest=digest)
+        prompt = build_feedback_insights_prompt(prompt_version=runtime_cfg.prompt_version, digest=digest)
         try:
             parsed = LLMFeedbackInsights.model_validate(client.generate_json(prompt))
             payload = {
@@ -53,13 +54,13 @@ def generate_feedback_insight(db: Session, *, cv_id: str, days: int = 7) -> mode
                 "llm_status": "ok",
                 "llm_error": None,
             }
-            model_name = settings.llm_model
+            model_name = runtime_cfg.model
         except (LLMClientError, ValueError) as exc:
             payload = _fallback_insight_payload(digest, error=str(exc))
     else:
         payload = _fallback_insight_payload(
             digest,
-            error=f"LLM disabled or missing {settings.llm_provider} configuration",
+            error=f"LLM disabled or missing {runtime_cfg.provider} configuration",
         )
 
     insight = models.Insight(

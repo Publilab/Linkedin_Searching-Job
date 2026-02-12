@@ -48,6 +48,16 @@ def run_db_migrations(engine: Engine) -> None:
         return
 
     with engine.begin() as conn:
+        conn.exec_driver_sql(
+            """
+            CREATE TABLE IF NOT EXISTS app_settings (
+                key TEXT PRIMARY KEY,
+                value_json TEXT NOT NULL DEFAULT '{}',
+                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+
         for table_name, columns in _TABLE_COLUMNS.items():
             if not _table_exists(conn, table_name):
                 continue

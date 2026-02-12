@@ -277,3 +277,26 @@ class InsightOut(BaseModel):
     token_in: int = 0
     token_out: int = 0
     insights: InsightPayloadOut
+
+
+class LLMSettingsOut(BaseModel):
+    provider: Literal["openai", "google_gemini"]
+    model: str
+    llm_enabled: bool
+    key_present: bool
+    openai_base_url: str | None = None
+
+
+class LLMSettingsUpdateIn(BaseModel):
+    provider: Literal["openai", "google_gemini"]
+    model: str
+    llm_enabled: bool = True
+    api_key: str | None = None
+    openai_base_url: str | None = None
+
+
+class LLMSettingsTestOut(BaseModel):
+    ok: bool
+    message: str
+    provider: Literal["openai", "google_gemini"]
+    model: str

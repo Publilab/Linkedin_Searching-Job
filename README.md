@@ -1,63 +1,45 @@
-# LinkedIn CV Job Finder (Greenfield + LLM)
+# SeekJob
 
-Aplicacion local para:
+Aplicación local para analizar CV, generar estrategia con IA y buscar ofertas en portales permitidos.
 
-1. Subir CV en PDF/DOCX.
-2. Revisar/confirmar resumen estructurado.
-3. Analizar perfil con LLM externo (OpenAI GPT-5-mini por defecto, con fallback deterministico).
-4. Buscar ofertas en portales permitidos sin login (`LinkedIn public`, `BNE public` y `Empleos Públicos`).
-5. Calcular score hibrido por fit deterministico + fit LLM + recencia + ubicacion.
-6. Guardar resultados en SQLite con checklist y enlace de postulacion.
-7. Re-buscar en segundo plano solo cuando se activa manualmente (default 60 minutos) y mostrar nuevas arriba.
+## Stack
 
-## Estructura
+- Backend: FastAPI + SQLAlchemy + SQLite + scheduler interno.
+- Frontend: Next.js.
+- Desktop: Tauri (macOS Intel/Monterey) con backend embebido.
+- LLM: OpenAI o Google Gemini (fallback determinístico si falla o no hay key).
 
-- `backend/`: FastAPI + SQLAlchemy + scheduler interno + capa LLM.
-- `frontend/`: Next.js UI bilingue ES/EN.
+## Flujo principal
 
-## Reglas de dedupe
+1. Subes CV (`.pdf` o `.docx`).
+2. Se extrae texto y se crea resumen editable.
+3. IA genera análisis del perfil y consultas sugeridas.
+4. Ejecutas búsqueda en fuentes habilitadas.
+5. Se calcula score (`match`, `llm_fit`, `final_score`) y se guarda en SQLite.
+6. Opcional: activas segundo plano (cada 60 min, solo con la app abierta).
 
-1. Primero por `source + external_job_id`.
-2. Si no hay id, fallback por `canonical_url_hash`.
-3. Si la oferta ya existe, se actualizan sus datos (incluye `applicant_count`) sin duplicar filas.
+## Variables `.env` (modo web/dev)
 
-## Modelo de datos (SQLite)
+Archivo raíz `.env.example`:
 
-- `cv_documents`
-- `candidate_profiles`
-- `search_configs`
-- `job_postings`
-- `search_results`
-- `scheduler_runs`
-- `scheduler_state`
-- `result_checks`
+- `DATABASE_URL=sqlite:///./app.db`
+- `SCHEDULER_INTERVAL_MINUTES=60`
+- `LLM_ENABLED=true`
+- `LLM_PROVIDER=openai`
+- `LLM_MODEL=gpt-5-mini`
+- `OPENAI_API_KEY=...`
+- `OPENAI_BASE_URL=`
+- `GEMINI_API_KEY=`
+- `LLM_TIMEOUT_SECONDS=90`
+- `LLM_MAX_RETRIES=3`
+- `LLM_MAX_JOBS_PER_RUN=25`
+- `LLM_PROMPT_VERSION=v1`
 
-## LLM y privacidad
+En desktop no necesitas editar `.env` para la API key: se configura desde la UI.
 
-- Proveedor configurable por `LLM_PROVIDER` (`openai` o `google_gemini`).
-- Default recomendado: `openai` + `LLM_MODEL=gpt-5-mini`.
-- Modo: hibrido con fallback deterministico.
-- Redaccion PII previa al envio (email, telefono, URL y nombre probable).
-- Si faltan credenciales del proveedor activo, la app no se rompe y funciona en fallback.
+## Ejecutar en modo web (actual)
 
-## Variables de entorno
-
-Usa `.env.example` como base:
-
-- `DATABASE_URL`
-- `SCHEDULER_INTERVAL_MINUTES`
-- `LLM_ENABLED`
-- `LLM_PROVIDER`
-- `OPENAI_API_KEY`
-- `OPENAI_BASE_URL`
-- `GEMINI_API_KEY`
-- `LLM_MODEL`
-- `LLM_TIMEOUT_SECONDS`
-- `LLM_MAX_RETRIES`
-- `LLM_MAX_JOBS_PER_RUN`
-- `LLM_PROMPT_VERSION`
-
-## Backend
+### Backend
 
 ```bash
 cd backend
@@ -67,13 +49,71 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload --port 8000
 ```
 
-## Frontend
+### Frontend
 
 ```bash
 cd frontend
 npm install
 NEXT_PUBLIC_API_BASE=http://localhost:8000/api npm run dev
 ```
+
+## Ejecutar en modo desktop (Tauri)
+
+### Prerrequisitos macOS
+
+- Xcode Command Line Tools.
+- Rust (`rustup`, `cargo`).
+- Node/npm.
+- Python 3.
+
+Instalacion rapida de Rust:
+
+```bash
+curl https://sh.rustup.rs -sSf | sh
+source "$HOME/.cargo/env"
+```
+
+### Desarrollo desktop
+
+```bash
+./scripts/dev_seekjob_desktop.sh
+```
+
+Esto abre la ventana nativa de SeekJob y lanza backend local embebido.
+
+### Build de `SeekJob.app`
+
+```bash
+./scripts/build_seekjob_desktop_macos.sh
+```
+
+Bundle esperado:
+
+`desktop/src-tauri/target/release/bundle/macos/SeekJob.app`
+
+Nota: el primer inicio puede demorar (hasta ~1 minuto) porque el backend embebido se extrae e inicializa.
+
+Si ejecutas `npm run tauri:build` directamente y falta `cargo`, ahora veras un mensaje guiado para instalar Rust.
+
+## Desktop: decisiones implementadas
+
+- UI dentro de app nativa (sin usar navegador para la interfaz).
+- Backend embebido en el bundle (`seekjob-backend` via PyInstaller).
+- Links de ofertas se abren forzando Chrome (`open -a "Google Chrome"`), con fallback al navegador por defecto.
+- Persistencia en:
+  - `~/Library/Application Support/SeekJob/app.db`
+  - `~/Library/Application Support/SeekJob/logs/`
+- Migración inicial automática desde `backend/app.db` (si existe) en primer inicio.
+- Scheduler solo corre con la app abierta.
+- Configuración LLM desde UI (provider/model/key/enable/test) con key en keychain o fallback protegido.
+
+## Portales y dedupe
+
+- Activos permitidos: `linkedin_public`, `bne_public`, `empleos_publicos_public`.
+- Dedupe:
+  1. `source + external_job_id`
+  2. fallback por `canonical_url_hash`
+- Si la oferta existe: actualiza datos (incluyendo `applicant_count`) sin duplicar filas.
 
 ## Endpoints principales
 
@@ -83,16 +123,26 @@ NEXT_PUBLIC_API_BASE=http://localhost:8000/api npm run dev
 - `POST /api/cv/{cv_id}/analyze`
 - `GET /api/cv/{cv_id}/strategy`
 - `GET /api/session/current`
+- `GET /api/session/history`
 - `POST /api/session/state`
 - `POST /api/session/resume`
 - `POST /api/session/close`
+- `POST /api/session/purge-db`
 - `POST /api/searches`
-- `GET /api/searches/sources`
+- `PATCH /api/searches/{search_id}`
 - `POST /api/searches/{search_id}/run`
 - `GET /api/searches/{search_id}/results`
+- `DELETE /api/searches/{search_id}/results`
 - `GET /api/searches/{search_id}/facets`
 - `GET /api/searches/{search_id}/new-count`
+- `GET /api/searches/sources`
 - `PATCH /api/searches/results/{result_id}/check`
+- `POST /api/interactions`
+- `GET /api/insights/cv/{cv_id}/latest`
+- `POST /api/insights/cv/{cv_id}/generate`
+- `GET /api/settings/llm`
+- `PUT /api/settings/llm`
+- `POST /api/settings/llm/test`
 - `POST /api/scheduler/start`
 - `POST /api/scheduler/stop`
 - `GET /api/scheduler/status`
@@ -101,26 +151,4 @@ NEXT_PUBLIC_API_BASE=http://localhost:8000/api npm run dev
 
 - Con LLM: `0.55*llm_fit + 0.25*deterministico + 0.10*recencia + 0.10*ubicacion`.
 - Fallback: `0.75*deterministico + 0.15*recencia + 0.10*ubicacion`.
-
-## Mejora de estrategia
-
-- El parser de CV identifica secciones completas (experiencia, educación/formación, habilidades e idiomas) en ES/EN.
-- Se prioriza experiencia + educación para construir consultas de búsqueda.
-- `GET /api/cv/{cv_id}/strategy` entrega queries recomendadas y roles demandados (internet/fallback).
-
-## Ventanas de publicación soportadas
-
-- `1h`, `3h`, `8h`, `24h`, `72h`, `168h (1 semana)`, `720h (1 mes)`.
-
-## Paginación de resultados
-
-- `GET /api/searches/{search_id}/results` soporta `page` (default `1`) y `page_size` (default `50`, max `200`).
-
-## Multi-portal permitido
-
-- Selector de portales en UI (`Búsqueda`) para elegir fuentes por corrida.
-- Columna `Fuente` en la tabla de resultados.
-- Filtros/facetas incluyen `source`.
-- Estado actual de conectores:
-  - Activos: `linkedin_public`, `bne_public`, `empleos_publicos_public`.
-  - Mostrados pero no activos: `trabajando_public`, `indeed_public` (requieren integración oficial/API).
+- Regla de producto: ofertas con `applicant_count >= 100` se excluyen.

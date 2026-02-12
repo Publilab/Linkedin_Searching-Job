@@ -4,10 +4,10 @@ import hashlib
 import re
 from typing import Any
 
-from app.config import settings
 from app.services.llm import LLMClientError, get_llm_client
 from app.services.llm.prompts import build_job_prompt
 from app.services.llm.schemas import LLMJobEvaluation
+from app.services.runtime_settings import load_runtime_llm_config
 
 
 def evaluate_job_fit(
@@ -19,18 +19,25 @@ def evaluate_job_fit(
     allow_llm: bool = True,
 ) -> dict[str, Any]:
     analysis_hash = compute_job_content_hash(job_payload)
+    runtime_cfg = load_runtime_llm_config()
 
-    fallback = _fallback_result(job_payload, deterministic_score, analysis_hash, error=None)
+    fallback = _fallback_result(
+        job_payload,
+        deterministic_score,
+        analysis_hash,
+        error=None,
+        prompt_version=runtime_cfg.prompt_version,
+    )
     if not allow_llm:
         return fallback
 
     client = get_llm_client()
     if not client.enabled:
-        fallback["llm_error"] = f"LLM disabled or missing {settings.llm_provider} configuration"
+        fallback["llm_error"] = f"LLM disabled or missing {runtime_cfg.provider} configuration"
         return fallback
 
     prompt = build_job_prompt(
-        prompt_version=settings.llm_prompt_version,
+        prompt_version=runtime_cfg.prompt_version,
         profile_summary=profile_summary,
         profile_analysis=profile_analysis,
         job_payload=job_payload,
@@ -57,8 +64,8 @@ def evaluate_job_fit(
             "role_alignment": _clean_list(parsed.role_alignment)[:8],
             "llm_status": "ok",
             "llm_analysis_hash": analysis_hash,
-            "llm_model": settings.llm_model,
-            "llm_prompt_version": settings.llm_prompt_version,
+            "llm_model": runtime_cfg.model,
+            "llm_prompt_version": runtime_cfg.prompt_version,
             "llm_error": None,
         }
     except (LLMClientError, ValueError) as exc:
@@ -85,6 +92,7 @@ def _fallback_result(
     analysis_hash: str,
     *,
     error: str | None,
+    prompt_version: str,
 ) -> dict[str, Any]:
     category, subcategory = _infer_job_category(job_payload)
     title = str(job_payload.get("title") or "").strip() or "Role"
@@ -99,7 +107,7 @@ def _fallback_result(
         "llm_status": "fallback",
         "llm_analysis_hash": analysis_hash,
         "llm_model": None,
-        "llm_prompt_version": settings.llm_prompt_version,
+        "llm_prompt_version": prompt_version,
         "llm_error": error,
     }
 

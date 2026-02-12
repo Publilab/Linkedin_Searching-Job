@@ -7,12 +7,12 @@ from sqlalchemy import and_, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app import models
-from app.config import settings
 from app.services.job_ai_service import compute_job_content_hash, evaluate_job_fit
 from app.services.job_sources import fetch_jobs, normalize_sources
 from app.services.linkedin_scraper import scrape_jobs as scrape_linkedin_jobs
 from app.services.learning_service import personalization_score_for_job, preferred_query_seeds
 from app.services.matcher import compute_match
+from app.services.runtime_settings import load_runtime_llm_config
 
 # Backward-compatible alias used by tests that monkeypatch this symbol.
 scrape_jobs = scrape_linkedin_jobs
@@ -57,6 +57,7 @@ def run_search_once(session_factory: sessionmaker, search_id: str, run_type: str
         profile_summary = _profile_summary(profile)
         profile_analysis = _profile_analysis(profile)
         learned_preferences = profile.learned_preferences_json or {}
+        runtime_cfg = load_runtime_llm_config(db)
 
         run = models.SchedulerRun(
             search_config_id=search.id,
@@ -135,7 +136,7 @@ def run_search_once(session_factory: sessionmaker, search_id: str, run_type: str
 
         new_found = 0
         eligible_found = 0
-        llm_budget = max(int(settings.llm_max_jobs_per_run), 0)
+        llm_budget = max(int(runtime_cfg.max_jobs_per_run), 0)
 
         for job in scraped_jobs.values():
             posting = _upsert_posting(db, job)
@@ -175,7 +176,7 @@ def run_search_once(session_factory: sessionmaker, search_id: str, run_type: str
                     "llm_status": result.llm_status or "fallback",
                     "llm_analysis_hash": result.llm_analysis_hash or posting.job_content_hash,
                     "llm_model": None,
-                    "llm_prompt_version": settings.llm_prompt_version,
+                    "llm_prompt_version": runtime_cfg.prompt_version,
                     "llm_error": None,
                 }
 

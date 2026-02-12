@@ -23,17 +23,21 @@ class GeminiLLMClient:
         model: str | None = None,
         timeout_seconds: int | None = None,
         max_retries: int | None = None,
+        provider: str | None = None,
+        llm_enabled: bool | None = None,
     ):
         self.api_key = api_key if api_key is not None else settings.gemini_api_key
         self.model = model if model is not None else settings.llm_model
         self.timeout_seconds = timeout_seconds if timeout_seconds is not None else settings.llm_timeout_seconds
         self.max_retries = max_retries if max_retries is not None else settings.llm_max_retries
+        self.provider = provider if provider is not None else settings.llm_provider
+        self.runtime_enabled = llm_enabled if llm_enabled is not None else settings.llm_enabled
 
     @property
     def enabled(self) -> bool:
         return bool(
-            settings.llm_enabled
-            and settings.llm_provider == "google_gemini"
+            self.runtime_enabled
+            and str(self.provider or "").strip().lower() == "google_gemini"
             and self.api_key
             and self.model
         )
