@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Generator
+from pathlib import Path
 
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import Session, declarative_base, sessionmaker
@@ -9,9 +10,21 @@ from sqlalchemy.orm import Session, declarative_base, sessionmaker
 from app.config import settings
 
 
-is_sqlite = settings.database_url.startswith("sqlite")
+def _resolve_database_url() -> str:
+    configured = (settings.database_url or "").strip()
+    if settings.seekjob_data_dir and configured in {"", "sqlite:///./app.db"}:
+        data_dir = Path(settings.seekjob_data_dir).expanduser()
+        data_dir.mkdir(parents=True, exist_ok=True)
+        db_path = (data_dir / "app.db").resolve()
+        return f"sqlite:///{db_path}"
+
+    return configured or "sqlite:///./app.db"
+
+
+database_url = _resolve_database_url()
+is_sqlite = database_url.startswith("sqlite")
 connect_args = {"check_same_thread": False, "timeout": 30} if is_sqlite else {}
-engine = create_engine(settings.database_url, future=True, connect_args=connect_args)
+engine = create_engine(database_url, future=True, connect_args=connect_args)
 
 
 def _set_sqlite_pragmas(dbapi_connection, _connection_record) -> None:

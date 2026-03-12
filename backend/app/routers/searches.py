@@ -34,6 +34,7 @@ def _serialize_results(
     db: Session,
     search_id: str,
     *,
+    max_applicant_count: int | None = None,
     only_new: bool = False,
     sort_by: Literal["newest", "best_fit"] = "newest",
     source: str | None = None,
@@ -49,8 +50,10 @@ def _serialize_results(
         .join(models.JobPosting, models.SearchResult.job_posting_id == models.JobPosting.id)
         .outerjoin(models.ResultCheck, models.ResultCheck.search_result_id == models.SearchResult.id)
         .where(models.SearchResult.search_config_id == search_id)
-        .where(models.JobPosting.applicant_count < 100)
     )
+
+    if max_applicant_count is not None:
+        stmt = stmt.where(models.JobPosting.applicant_count < max_applicant_count)
 
     if only_new:
         stmt = stmt.where(models.SearchResult.is_new.is_(True))
@@ -167,6 +170,7 @@ async def create_search(payload: SearchCreateIn, db: Session = Depends(get_db)) 
         time_window_hours=payload.time_window_hours,
         keywords_json=payload.keywords,
         sources_json=sources,
+        max_applicant_count=payload.max_applicant_count,
         active=True,
     )
     db.add(search)
@@ -217,6 +221,8 @@ def update_search(
         search.keywords_json = updates["keywords"] or []
     if "sources" in updates:
         search.sources_json = normalize_sources(updates["sources"] or [])
+    if "max_applicant_count" in updates:
+        search.max_applicant_count = updates["max_applicant_count"]
     if "active" in updates:
         search.active = bool(updates["active"])
 
@@ -246,6 +252,7 @@ def get_results(
     subcategory: str | None = Query(default=None),
     max_posted_hours: float | None = Query(default=None, ge=0),
     location_contains: str | None = Query(default=None),
+    max_applicant_count: int | None = Query(default=None, ge=0, le=10000),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
@@ -257,6 +264,7 @@ def get_results(
     return _serialize_results(
         db,
         search_id,
+        max_applicant_count=_effective_applicant_limit(search.max_applicant_count, max_applicant_count),
         only_new=only_new,
         sort_by=sort_by,
         source=source,
@@ -295,13 +303,20 @@ def get_new_count(search_id: str, db: Session = Depends(get_db)) -> dict:
     count = (
         db.query(models.SearchResult)
         .join(models.JobPosting, models.SearchResult.job_posting_id == models.JobPosting.id)
-        .filter(
-            models.SearchResult.search_config_id == search_id,
-            models.SearchResult.is_new.is_(True),
-            models.JobPosting.applicant_count < 100,
-        )
+        .filter(models.SearchResult.search_config_id == search_id, models.SearchResult.is_new.is_(True))
         .count()
     )
+    if search.max_applicant_count is not None:
+        count = (
+            db.query(models.SearchResult)
+            .join(models.JobPosting, models.SearchResult.job_posting_id == models.JobPosting.id)
+            .filter(
+                models.SearchResult.search_config_id == search_id,
+                models.SearchResult.is_new.is_(True),
+                models.JobPosting.applicant_count < search.max_applicant_count,
+            )
+            .count()
+        )
     return {"search_id": search_id, "new_count": count}
 
 
@@ -315,8 +330,9 @@ def get_facets(search_id: str, db: Session = Depends(get_db)) -> SearchFacetsOut
         select(models.SearchResult, models.JobPosting)
         .join(models.JobPosting, models.SearchResult.job_posting_id == models.JobPosting.id)
         .where(models.SearchResult.search_config_id == search_id)
-        .where(models.JobPosting.applicant_count < 100)
     ).all()
+    if search.max_applicant_count is not None:
+        rows = [row for row in rows if int((row[1].applicant_count or 0)) < search.max_applicant_count]
 
     now = datetime.utcnow()
 
@@ -427,5 +443,12 @@ def _search_config_out(search: models.SearchConfig) -> SearchConfigOut:
         time_window_hours=search.time_window_hours,
         keywords=search.keywords_json or [],
         sources=normalize_sources(search.sources_json or []),
+        max_applicant_count=search.max_applicant_count,
         active=bool(search.active),
     )
+
+
+def _effective_applicant_limit(configured: int | None, override: int | None) -> int | None:
+    if override is not None:
+        return override
+    return configured

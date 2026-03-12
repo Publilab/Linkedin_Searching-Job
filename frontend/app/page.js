@@ -1,8 +1,11 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { getApiBase, isDesktopRuntime, openInChrome } from "./lib/desktopBridge";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8000/api";
+const DEFAULT_API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8000/api";
+let resolvedApiBase = "";
+let resolvingApiBasePromise = null;
 const SESSION_STORAGE_KEY = "linkedin_cv_session_id";
 
 const I18N = {
@@ -59,6 +62,21 @@ const I18N = {
     refreshInsights: "Actualizar feedback",
     insightStatus: "Estado feedback",
     insightNoData: "Sin feedback generado todavía.",
+    llmSettings: "Configuración LLM",
+    llmProvider: "Proveedor",
+    llmModel: "Modelo",
+    llmApiKey: "API key",
+    llmBaseUrl: "OpenAI Base URL",
+    llmEnabled: "LLM habilitado",
+    llmKeySaved: "API key guardada",
+    llmSave: "Guardar LLM",
+    llmTest: "Probar LLM",
+    llmTestOk: "Conexión LLM OK",
+    llmTestFail: "Prueba LLM falló",
+    llmDesktopMode: "Modo escritorio",
+    llmWebMode: "Modo web",
+    openOffer: "Abrir",
+    applicantLimit: "Máx. postulantes",
   },
   en: {
     title: "SeekJob",
@@ -113,11 +131,45 @@ const I18N = {
     refreshInsights: "Refresh feedback",
     insightStatus: "Feedback status",
     insightNoData: "No feedback generated yet.",
+    llmSettings: "LLM settings",
+    llmProvider: "Provider",
+    llmModel: "Model",
+    llmApiKey: "API key",
+    llmBaseUrl: "OpenAI Base URL",
+    llmEnabled: "LLM enabled",
+    llmKeySaved: "API key saved",
+    llmSave: "Save LLM",
+    llmTest: "Test LLM",
+    llmTestOk: "LLM connection OK",
+    llmTestFail: "LLM test failed",
+    llmDesktopMode: "Desktop mode",
+    llmWebMode: "Web mode",
+    openOffer: "Open",
+    applicantLimit: "Max applicants",
   },
 };
 
+async function resolveRuntimeApiBase() {
+  if (resolvedApiBase) return resolvedApiBase;
+  if (resolvingApiBasePromise) return resolvingApiBasePromise;
+
+  resolvingApiBasePromise = (async () => {
+    const candidate = await getApiBase();
+    const finalBase = String(candidate || "").trim() || DEFAULT_API_BASE;
+    resolvedApiBase = finalBase;
+    return finalBase;
+  })();
+
+  try {
+    return await resolvingApiBasePromise;
+  } finally {
+    resolvingApiBasePromise = null;
+  }
+}
+
 async function api(path, options = {}) {
-  const response = await fetch(`${API_BASE}${path}`, {
+  const apiBase = await resolveRuntimeApiBase();
+  const response = await fetch(`${apiBase}${path}`, {
     cache: "no-store",
     ...options,
   });
@@ -349,6 +401,7 @@ export default function Home() {
   const [country, setCountry] = useState("");
   const [city, setCity] = useState("");
   const [timeWindow, setTimeWindow] = useState("24");
+  const [maxApplicantCount, setMaxApplicantCount] = useState("100");
   const [availableSources, setAvailableSources] = useState([]);
   const [selectedSources, setSelectedSources] = useState(["linkedin_public"]);
   const [queryItems, setQueryItems] = useState([]);
@@ -384,6 +437,20 @@ export default function Home() {
   });
   const [scheduler, setScheduler] = useState({ is_running: false, interval_minutes: 60, last_tick_at: null });
   const [latestInsight, setLatestInsight] = useState(null);
+  const [runtimeInfo, setRuntimeInfo] = useState({
+    isDesktop: false,
+    apiBase: DEFAULT_API_BASE,
+  });
+  const [llmSettings, setLlmSettings] = useState({
+    provider: "openai",
+    model: "gpt-5-mini",
+    llm_enabled: true,
+    key_present: false,
+    openai_base_url: "",
+  });
+  const [llmApiKeyInput, setLlmApiKeyInput] = useState("");
+  const [llmSettingsMessage, setLlmSettingsMessage] = useState("");
+  const [llmSettingsError, setLlmSettingsError] = useState("");
 
   const summaryText = useMemo(
     () => ({
@@ -425,6 +492,66 @@ export default function Home() {
     setSelectedSources((prev) => normalizeSourceSelection(prev, items));
   };
 
+  const refreshRuntimeInfo = async () => {
+    const apiBase = await resolveRuntimeApiBase();
+    setRuntimeInfo({
+      isDesktop: isDesktopRuntime(),
+      apiBase,
+    });
+  };
+
+  const refreshLLMSettings = async () => {
+    const out = await api("/settings/llm");
+    setLlmSettings({
+      provider: out.provider || "openai",
+      model: out.model || "gpt-5-mini",
+      llm_enabled: out.llm_enabled !== false,
+      key_present: Boolean(out.key_present),
+      openai_base_url: out.openai_base_url || "",
+    });
+  };
+
+  const saveLLMSettings = () =>
+    run(async () => {
+      setLlmSettingsMessage("");
+      setLlmSettingsError("");
+      const payload = {
+        provider: llmSettings.provider,
+        model: llmSettings.model || "gpt-5-mini",
+        llm_enabled: llmSettings.llm_enabled !== false,
+        api_key: llmApiKeyInput ? llmApiKeyInput : null,
+        openai_base_url: llmSettings.provider === "openai" ? llmSettings.openai_base_url || null : null,
+      };
+      const out = await api("/settings/llm", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      setLlmSettings({
+        provider: out.provider || "openai",
+        model: out.model || "gpt-5-mini",
+        llm_enabled: out.llm_enabled !== false,
+        key_present: Boolean(out.key_present),
+        openai_base_url: out.openai_base_url || "",
+      });
+      setLlmApiKeyInput("");
+      setLlmSettingsMessage(t.llmKeySaved);
+    });
+
+  const testLLMSettings = () =>
+    run(async () => {
+      setLlmSettingsMessage("");
+      setLlmSettingsError("");
+      const out = await api("/settings/llm/test", {
+        method: "POST",
+      });
+      if (out.ok) {
+        setLlmSettingsMessage(`${t.llmTestOk}: ${out.message}`);
+        return;
+      }
+      setLlmSettingsError(`${t.llmTestFail}: ${out.message}`);
+    });
+
   const loadSessionSnapshot = async (session) => {
     if (!session) return;
 
@@ -454,6 +581,7 @@ export default function Home() {
     if (session.active_search_id) {
       try {
         const searchOut = await api(`/searches/${session.active_search_id}`);
+        setMaxApplicantCount(searchOut?.max_applicant_count == null ? "" : String(searchOut.max_applicant_count));
         setSelectedSources((prev) =>
           normalizeSourceSelection(searchOut?.sources?.length ? searchOut.sources : prev, availableSources),
         );
@@ -533,6 +661,28 @@ export default function Home() {
     }
   };
 
+  const handleOpenJob = async (row) => {
+    if (!row?.job_url) return;
+    try {
+      await openInChrome(row.job_url);
+    } catch (err) {
+      setError(err?.message || "Could not open URL");
+    }
+    await logInteraction({
+      cv_id: cvId,
+      session_id: sessionId || null,
+      search_id: searchId || null,
+      result_id: row.result_id,
+      job_id: row.job_id,
+      event_type: "open",
+      meta: {
+        title: row.title,
+        source: row.source,
+        url: row.job_url,
+      },
+    });
+  };
+
   const refreshLatestInsight = async (targetCvId = cvId) => {
     if (!targetCvId) {
       setLatestInsight(null);
@@ -552,6 +702,7 @@ export default function Home() {
     if (typeof uiState.country === "string") setCountry(uiState.country);
     if (typeof uiState.city === "string") setCity(uiState.city);
     if (uiState.time_window_hours != null) setTimeWindow(String(uiState.time_window_hours));
+    if (uiState.max_applicant_count != null) setMaxApplicantCount(String(uiState.max_applicant_count));
     if (typeof uiState.sort_by === "string") setSortBy(uiState.sort_by);
     if (typeof uiState.source === "string") setSourceFilter(uiState.source);
     if (typeof uiState.category === "string") setCategoryFilter(uiState.category);
@@ -582,6 +733,8 @@ export default function Home() {
   };
 
   useEffect(() => {
+    refreshRuntimeInfo().catch(() => null);
+    refreshLLMSettings().catch(() => null);
     refreshScheduler().catch(() => null);
     refreshSessionHistory().catch(() => null);
     refreshSources().catch(() => null);
@@ -650,6 +803,7 @@ export default function Home() {
         country,
         city,
         time_window_hours: Number(timeWindow) || 24,
+        max_applicant_count: maxApplicantCount === "" ? null : Math.max(0, Number(maxApplicantCount) || 0),
         sources: selectedSources,
         query_items: queryItems,
         suggested_queries: suggestedQueries,
@@ -683,6 +837,7 @@ export default function Home() {
     country,
     city,
     timeWindow,
+    maxApplicantCount,
     selectedSources,
     queryItems,
     suggestedQueries,
@@ -822,6 +977,7 @@ export default function Home() {
           time_window_hours: Number(timeWindow),
           keywords: enabledKeywords,
           sources: selectedSources,
+          max_applicant_count: maxApplicantCount === "" ? null : Math.max(0, Number(maxApplicantCount) || 0),
         }),
       });
 
@@ -849,6 +1005,7 @@ export default function Home() {
           time_window_hours: Number(timeWindow),
           keywords: enabledKeywords,
           sources: selectedSources,
+          max_applicant_count: maxApplicantCount === "" ? null : Math.max(0, Number(maxApplicantCount) || 0),
         }),
       });
       await api(`/searches/${searchId}/run`, { method: "POST" });
@@ -948,6 +1105,7 @@ export default function Home() {
       market_roles: [],
     });
     setQueryItems([]);
+    setMaxApplicantCount("100");
     setSuggestedQueries([]);
     setDismissedSuggestedQueries([]);
     setSummary({
@@ -1253,6 +1411,94 @@ export default function Home() {
         </section>
       </div> : null}
 
+      {activeTab === "a" ? <section className="card compact-controls" style={{ marginTop: 14 }}>
+        <h2>{t.llmSettings}</h2>
+        <p className="small">
+          {runtimeInfo.isDesktop ? t.llmDesktopMode : t.llmWebMode} | API: <strong>{runtimeInfo.apiBase}</strong>
+        </p>
+        <div className="row">
+          <label>
+            {t.llmProvider}
+            <select
+              value={llmSettings.provider}
+              onChange={(e) =>
+                setLlmSettings((prev) => ({
+                  ...prev,
+                  provider: e.target.value,
+                }))
+              }
+            >
+              <option value="openai">OpenAI</option>
+              <option value="google_gemini">Google Gemini</option>
+            </select>
+          </label>
+          <label>
+            {t.llmModel}
+            <input
+              value={llmSettings.model}
+              onChange={(e) =>
+                setLlmSettings((prev) => ({
+                  ...prev,
+                  model: e.target.value,
+                }))
+              }
+              placeholder={llmSettings.provider === "openai" ? "gpt-5-mini" : "gemini-2.0-flash"}
+            />
+          </label>
+          <label>
+            {t.llmApiKey}
+            <input
+              type="password"
+              value={llmApiKeyInput}
+              onChange={(e) => setLlmApiKeyInput(e.target.value)}
+              placeholder={llmSettings.key_present ? `(${t.llmKeySaved})` : "sk-... / AIza..."}
+            />
+          </label>
+        </div>
+        {llmSettings.provider === "openai" ? (
+          <label>
+            {t.llmBaseUrl}
+            <input
+              value={llmSettings.openai_base_url || ""}
+              onChange={(e) =>
+                setLlmSettings((prev) => ({
+                  ...prev,
+                  openai_base_url: e.target.value,
+                }))
+              }
+              placeholder="https://api.openai.com/v1"
+            />
+          </label>
+        ) : null}
+        <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6 }}>
+          <input
+            type="checkbox"
+            checked={llmSettings.llm_enabled !== false}
+            onChange={(e) =>
+              setLlmSettings((prev) => ({
+                ...prev,
+                llm_enabled: e.target.checked,
+              }))
+            }
+          />
+          <span>{t.llmEnabled}</span>
+        </label>
+        <p className="small">{t.llmApiKey}: {llmSettings.key_present ? "Yes" : "No"}</p>
+        <div className="toolbar">
+          <button className="ai-strategy" onClick={saveLLMSettings} disabled={busy}>
+            {t.llmSave}
+          </button>
+          <button className="ai-reanalyze" onClick={testLLMSettings} disabled={busy}>
+            {t.llmTest}
+          </button>
+          <button className="secondary" onClick={() => run(refreshLLMSettings)} disabled={busy}>
+            Refresh
+          </button>
+        </div>
+        {llmSettingsMessage ? <p className="small success">{llmSettingsMessage}</p> : null}
+        {llmSettingsError ? <p className="small alert" style={{ marginTop: 8 }}>{llmSettingsError}</p> : null}
+      </section> : null}
+
       {activeTab === "b" ? <section className="card" style={{ marginTop: 14 }}>
         <h2>{t.sessionHistory}</h2>
         <div className="toolbar" style={{ marginBottom: 10 }}>
@@ -1487,6 +1733,17 @@ export default function Home() {
               <option value="168">1w</option>
               <option value="720">1m</option>
             </select>
+          </label>
+          <label>
+            {t.applicantLimit}
+            <input
+              type="number"
+              min="0"
+              step="1"
+              value={maxApplicantCount}
+              onChange={(e) => setMaxApplicantCount(e.target.value)}
+              placeholder="100"
+            />
           </label>
         </div>
         <div style={{ marginTop: 8 }}>
@@ -1811,29 +2068,14 @@ export default function Home() {
                     <td><strong>{row.final_score?.toFixed?.(2) ?? row.final_score}</strong></td>
                     <td className="small">{(row.fit_reasons || []).slice(0, 2).join(" | ") || "-"}</td>
                     <td>
-                      <a
-                        className="job-link"
-                        href={row.job_url}
-                        target="_blank"
-                        rel="noreferrer"
-                        onClick={() =>
-                          logInteraction({
-                            cv_id: cvId,
-                            session_id: sessionId || null,
-                            search_id: searchId || null,
-                            result_id: row.result_id,
-                            job_id: row.job_id,
-                            event_type: "open",
-                            meta: {
-                              title: row.title,
-                              source: row.source,
-                              url: row.job_url,
-                            },
-                          })
-                        }
+                      <button
+                        type="button"
+                        className="secondary"
+                        onClick={() => handleOpenJob(row)}
+                        disabled={!row.job_url}
                       >
-                        Open
-                      </a>
+                        {t.openOffer}
+                      </button>
                     </td>
                   </tr>
                 ))

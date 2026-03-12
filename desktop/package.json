@@ -1,0 +1,12 @@
+{
+  "name": "seekjob-desktop",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "tauri:dev": "bash -lc 'command -v cargo >/dev/null 2>&1 || { echo \"Cargo no esta instalado. Instala Rust con: curl https://sh.rustup.rs -sSf | sh\"; exit 1; }; tauri dev --config src-tauri/tauri.conf.json'",
+    "tauri:build": "bash -lc 'command -v cargo >/dev/null 2>&1 || { echo \"Cargo no esta instalado. Instala Rust con: curl https://sh.rustup.rs -sSf | sh\"; exit 1; }; tauri build --config src-tauri/tauri.conf.json'"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.1.0"
+  }
+}

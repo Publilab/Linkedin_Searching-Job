@@ -145,16 +145,20 @@ def preferred_query_seeds(preferences: dict[str, Any] | None, *, limit: int = 8)
 
     titles = _top_positive_keys(prefs.get("title_scores"), limit=max(limit, 4))
     categories = _top_positive_keys(prefs.get("category_scores"), limit=4)
+    subcategories = _top_positive_keys(prefs.get("subcategory_scores"), limit=4)
     tokens = _top_positive_keys(prefs.get("token_scores"), limit=8)
 
     out: list[str] = []
     for item in titles:
-        out.append(item)
-    for item in categories:
+        out.extend(_query_expansions_for_preference(item))
+    for item in categories + subcategories:
         if len(out) >= limit:
             break
-        if item and item.lower() not in {q.lower() for q in out}:
-            out.append(item)
+        for expanded in _query_expansions_for_preference(item):
+            if len(out) >= limit:
+                break
+            if expanded and expanded.lower() not in {q.lower() for q in out}:
+                out.append(expanded)
     for token in tokens:
         if len(out) >= limit:
             break
@@ -407,3 +411,28 @@ def _normalize_key(value: Any) -> str:
     if len(cleaned) > 160:
         cleaned = cleaned[:160].strip()
     return cleaned
+
+
+def _query_expansions_for_preference(value: str) -> list[str]:
+    key = _normalize_key(value)
+    if not key:
+        return []
+
+    expansions = {
+        "data": ["analista de datos", "data analyst"],
+        "analytics": ["analista de datos", "business intelligence analyst"],
+        "backend": ["backend engineer", "desarrollador backend"],
+        "frontend": ["frontend engineer", "desarrollador frontend"],
+        "product management": ["project manager", "product manager"],
+        "human resources": ["analista de recursos humanos", "human resources analyst"],
+        "recursos humanos": ["analista de recursos humanos", "human resources analyst"],
+        "people operations": ["people operations", "human resources"],
+        "public administration": ["administrador publico", "public administrator"],
+        "government": ["gestion publica", "public policy analyst"],
+        "public policy": ["politicas publicas", "public policy analyst"],
+        "education": ["docente universitario", "university lecturer"],
+        "teaching": ["docente universitario", "university lecturer"],
+        "project management": ["gerente de proyectos", "project manager"],
+        "commercial": ["sales executive", "account executive"],
+    }
+    return expansions.get(key, [value])

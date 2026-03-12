@@ -4,9 +4,9 @@ export const metadata = {
   title: "SeekJob",
   description: "SeekJob: upload CV, review AI analysis, and search matching LinkedIn public jobs.",
   icons: {
-    icon: "/icon.svg",
-    shortcut: "/icon.svg",
-    apple: "/icon.svg",
+    icon: "/icon.png",
+    shortcut: "/icon.png",
+    apple: "/icon.png",
   },
 };
 

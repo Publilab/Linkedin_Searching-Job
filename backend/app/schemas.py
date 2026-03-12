@@ -68,6 +68,7 @@ class SearchCreateIn(BaseModel):
     time_window_hours: Literal[1, 3, 8, 24, 72, 168, 720] = 24
     keywords: list[str] = Field(default_factory=list)
     sources: list[str] = Field(default_factory=list)
+    max_applicant_count: int | None = Field(default=100, ge=0, le=10000)
 
 
 class SearchUpdateIn(BaseModel):
@@ -76,6 +77,7 @@ class SearchUpdateIn(BaseModel):
     time_window_hours: Literal[1, 3, 8, 24, 72, 168, 720] | None = None
     keywords: list[str] | None = None
     sources: list[str] | None = None
+    max_applicant_count: int | None = Field(default=None, ge=0, le=10000)
     active: bool | None = None
 
 
@@ -87,6 +89,7 @@ class SearchConfigOut(BaseModel):
     time_window_hours: int
     keywords: list[str] = Field(default_factory=list)
     sources: list[str] = Field(default_factory=list)
+    max_applicant_count: int | None = 100
     active: bool
 
 
@@ -277,3 +280,26 @@ class InsightOut(BaseModel):
     token_in: int = 0
     token_out: int = 0
     insights: InsightPayloadOut
+
+
+class LLMSettingsOut(BaseModel):
+    provider: Literal["openai", "google_gemini"]
+    model: str
+    llm_enabled: bool
+    key_present: bool
+    openai_base_url: str | None = None
+
+
+class LLMSettingsUpdateIn(BaseModel):
+    provider: Literal["openai", "google_gemini"]
+    model: str
+    llm_enabled: bool = True
+    api_key: str | None = None
+    openai_base_url: str | None = None
+
+
+class LLMSettingsTestOut(BaseModel):
+    ok: bool
+    message: str
+    provider: Literal["openai", "google_gemini"]
+    model: str

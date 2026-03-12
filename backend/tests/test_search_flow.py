@@ -7,7 +7,7 @@ from app import models
 from app.db import SessionLocal
 from app.main import app
 from app.services.job_sources import normalize_sources
-from app.services.search_service import run_search_once
+from app.services.search_service import _build_queries, run_search_once
 
 
 def test_sources_endpoint_lists_allowed_sources():
@@ -32,6 +32,37 @@ def test_sources_endpoint_lists_allowed_sources():
 def test_disabled_sources_are_ignored_in_normalization():
     assert normalize_sources(["trabajando_public"]) == ["linkedin_public"]
     assert normalize_sources(["indeed_public", "bne_public"]) == ["bne_public"]
+
+
+def test_build_queries_expands_roles_without_sector_noise():
+    out = _build_queries(
+        {
+            "skills": ["Python", "SQL", "Gestion de Proyectos"],
+            "experience": ["Gerente de Proyectos - Sector Publico", "Analista de Datos"],
+            "education": ["Administrador Publico"],
+            "languages": [],
+            "highlights": [],
+        },
+        {
+            "target_roles": ["Gerente de Proyectos Sector Publico"],
+            "secondary_roles": ["Analista de Datos"],
+            "strengths": ["RRHH", "Gestion Publica"],
+            "industries": ["Educacion"],
+        },
+        {
+            "recommended_queries": ["sector publico", "Docente Universitario"],
+        },
+        ["public sector", "People Operations"],
+        learned_preferences=None,
+    )
+
+    lowered = {item.lower() for item in out}
+    assert "gerente de proyectos" in lowered
+    assert "project manager" in lowered
+    assert "analista de datos" in lowered
+    assert "data analyst" in lowered
+    assert "sector publico" not in lowered
+    assert "public sector" not in lowered
 
 
 def test_search_flow_with_mocked_scraper(monkeypatch):
@@ -450,6 +481,56 @@ def test_search_accepts_week_and_month_windows(monkeypatch):
         assert updated.status_code == 200
         body = updated.json()
         assert body["time_window_hours"] == 720
+
+
+def test_search_respects_max_applicant_count(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.cv_extract._extract_pdf",
+        lambda _: "Data Analyst\nSkills: Python, SQL\nEducation: Bachelor",
+    )
+
+    def fake_scrape_jobs(keywords, location, time_window_hours, **kwargs):
+        return [
+            {
+                "source": "linkedin_public",
+                "external_job_id": "max-applicant-1",
+                "canonical_url": "https://www.linkedin.com/jobs/view/max-applicant-1",
+                "canonical_url_hash": "h-max-applicant-1",
+                "title": "Data Analyst",
+                "company": "Acme",
+                "location": "Santiago",
+                "description": "Python SQL analyst role",
+                "modality": "hybrid",
+                "easy_apply": True,
+                "applicant_count": 25,
+                "applicant_count_raw": "25 applicants",
+                "posted_at": None,
+            }
+        ]
+
+    monkeypatch.setattr("app.services.search_service.scrape_jobs", fake_scrape_jobs)
+
+    with TestClient(app) as client:
+        files = {"file": ("cv.pdf", BytesIO(b"dummy"), "application/pdf")}
+        cv_id = client.post("/api/cv/upload", files=files).json()["cv_id"]
+
+        created = client.post(
+            "/api/searches",
+            json={
+                "cv_id": cv_id,
+                "country": "Chile",
+                "city": "Santiago",
+                "time_window_hours": 24,
+                "keywords": ["Data Analyst"],
+                "max_applicant_count": 10,
+            },
+        )
+        assert created.status_code == 200
+        assert created.json()["results"]["total"] == 0
+
+        fetched = client.get(f"/api/searches/{created.json()['search_id']}")
+        assert fetched.status_code == 200
+        assert fetched.json()["max_applicant_count"] == 10
 
 
 def test_results_endpoint_pagination(monkeypatch):

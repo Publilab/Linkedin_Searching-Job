@@ -24,6 +24,16 @@ def _uuid() -> str:
     return str(uuid.uuid4())
 
 
+class AppSetting(Base):
+    __tablename__ = "app_settings"
+
+    key: Mapped[str] = mapped_column(String(120), primary_key=True)
+    value_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+
 class CVDocument(Base):
     __tablename__ = "cv_documents"
 
@@ -87,6 +97,7 @@ class SearchConfig(Base):
     time_window_hours: Mapped[int] = mapped_column(Integer, nullable=False, default=24)
     keywords_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     sources_json: Mapped[list] = mapped_column(JSON, nullable=False, default=lambda: ["linkedin_public"])
+    max_applicant_count: Mapped[int | None] = mapped_column(Integer, nullable=True, default=100)
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)

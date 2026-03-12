@@ -8,6 +8,8 @@ from app.config import settings
 from app.db import SessionLocal, engine, init_db
 from app.db_migrations import run_db_migrations
 from app.routers import cv, health, insights, interactions, scheduler, searches, sessions
+from app.routers import settings as settings_router
+from app.services.desktop_bootstrap import prepare_desktop_runtime
 from app.services.scheduler_service import SearchScheduler
 from app.services.search_service import ensure_scheduler_state
 
@@ -18,6 +20,7 @@ _scheduler: SearchScheduler | None = None
 async def lifespan(app: FastAPI):
     global _scheduler
 
+    prepare_desktop_runtime()
     init_db()
     run_db_migrations(engine)
 
@@ -61,5 +64,6 @@ app.include_router(cv.router, prefix="/api")
 app.include_router(searches.router, prefix="/api")
 app.include_router(interactions.router, prefix="/api")
 app.include_router(insights.router, prefix="/api")
+app.include_router(settings_router.router, prefix="/api")
 app.include_router(scheduler.router, prefix="/api")
 app.include_router(sessions.router, prefix="/api")
